@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
@@ -26,6 +27,19 @@ def load_jsonl(path: Path) -> List[Dict]:
 
 def result_path(output_dir: Path, item: Dict) -> Path:
     return output_dir / f"{item['idx']}.json"
+
+
+def build_run_output_dir(output_root: Path, agent: ReasoningAgent) -> Path:
+    agent_mode = getattr(agent, "agent_mode", agent.__class__.__name__)
+    safe_agent_mode = "".join(
+        char if char.isalnum() or char in ("-", "_") else "-"
+        for char in str(agent_mode).strip()
+    ).strip("-")
+    if not safe_agent_mode:
+        safe_agent_mode = "agent"
+
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    return output_root / f"{timestamp}-{safe_agent_mode}"
 
 
 def is_processed(path: Path) -> bool:
@@ -101,15 +115,20 @@ async def process_item(
 
 async def run(args: argparse.Namespace) -> None:
     input_path = Path(args.input_file)
-    output_dir = Path(args.output_dir)
+    output_root = Path(args.output_dir)
 
     items = load_jsonl(input_path)
 
     client = InternChatClient()
     agent = ReasoningAgent(client=client)
+    output_dir = build_run_output_dir(output_root, agent)
     semaphore = asyncio.Semaphore(LOCAL_MAX_CONCURRENCY)
 
-    print(f"Loaded {len(items)} items. Max concurrency: {LOCAL_MAX_CONCURRENCY}.")
+    print(
+        f"Loaded {len(items)} items. Agent mode: {getattr(agent, 'agent_mode', 'unknown')}. "
+        f"Max concurrency: {LOCAL_MAX_CONCURRENCY}."
+    )
+    print(f"Run output directory: {output_dir}")
     tasks = [process_item(agent, item, output_dir, semaphore) for item in items]
     await asyncio.gather(*tasks)
     print(f"Saved outputs to {output_dir}")
