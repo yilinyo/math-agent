@@ -8,7 +8,7 @@ import uvicorn
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the math reasoning Web backend.")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--host", default="127.0.0.1", help="Listen address; use 0.0.0.0 inside Docker")
+    parser.add_argument("--host", default="0.0.0.0", help="Listen address; use 127.0.0.1 for local-only access")
     parser.add_argument("--runtime", choices=("fake", "langgraph"), default="fake")
     parser.add_argument("--client-provider", help="Trusted module:function returning the injected chat client")
     parser.add_argument("--client-identity", help="Versioned provider/model identity for checkpoint compatibility")

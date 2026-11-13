@@ -74,6 +74,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 export const getHealth = (signal?: AbortSignal) => request<Health>('/health/ready', { signal });
 export const createSession = (signal?: AbortSignal) => request<{ id: string }>('/v1/sessions', { method: 'POST', body: '{}', signal });
+export const newIdempotencyKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)),
+  byte => byte.toString(16).padStart(2, '0')).join('');
 export const getTask = (session: string, id: string, signal?: AbortSignal) => request<Task>(taskPath(session, id), { signal });
 export const getSessions = (cursor?: string | null, signal?: AbortSignal) => request<Page<SessionSummary>>(
   `/v1/sessions?limit=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal });

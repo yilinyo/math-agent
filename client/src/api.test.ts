@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getSessions, getSessionTasks, parseEvent, SSEDecoder, submitTask, startQuestionBatch, taskFromEvent, uploadQuestions, validateFile, watchTask, type Task, type TraceEvent } from './api';
+import { ApiError, getSessions, getSessionTasks, newIdempotencyKey, parseEvent, SSEDecoder, submitTask, startQuestionBatch, taskFromEvent, uploadQuestions, validateFile, watchTask, type Task, type TraceEvent } from './api';
 
 const session = '00000000-0000-4000-8000-000000000001';
 const id = '00000000-0000-4000-8000-000000000002';
@@ -150,6 +150,17 @@ it.each(['succeeded', 'failed'])('keeps SSE open after a tool %s event until the
     expect(callbacks.task.mock.calls.at(-1)?.[0]).toMatchObject({ status: 'succeeded', final_response: completed.payload.final_response });
     expect(callbacks.error).not.toHaveBeenCalled();
   } finally { stop(); }
+});
+it('generates distinct idempotency keys without requiring randomUUID', () => {
+  const getRandomValues = vi.fn((bytes: Uint8Array) => {
+    bytes.set(Array.from({ length: bytes.length }, (_, index) => index));
+    return bytes;
+  });
+  vi.stubGlobal('crypto', { getRandomValues });
+  const first = newIdempotencyKey();
+  expect(first).toBe('000102030405060708090a0b0c0d0e0f');
+  getRandomValues.mockImplementationOnce((bytes: Uint8Array) => { bytes.fill(255); return bytes; });
+  expect(newIdempotencyKey()).toBe('ff'.repeat(16));
 });
 it('submits through the existing endpoint and retains the supplied idempotency key', async () => {
   const fetcher = vi.fn(async () => new Response(JSON.stringify(task), { status: 202 }));

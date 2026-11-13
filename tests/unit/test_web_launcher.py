@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from unittest.mock import Mock
 
 import pytest
@@ -67,6 +68,18 @@ def test_stop_does_not_signal_reused_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher.sys, "argv", ["web_launcher", "stop"])
     launcher.main()
     kill.assert_not_called()
+
+
+def test_backend_defaults_to_all_interfaces(monkeypatch):
+    from agent_platform import __main__ as backend
+    from agent_platform import app
+
+    run = Mock()
+    monkeypatch.setattr(backend.uvicorn, "run", run)
+    monkeypatch.setattr(app, "create_app", lambda **kwargs: object())
+    monkeypatch.setattr(sys, "argv", ["agent_platform"])
+    backend.main()
+    assert run.call_args.kwargs["host"] == "0.0.0.0"
 
 
 def test_missing_key_fails_before_runtime_construction(monkeypatch):

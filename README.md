@@ -107,6 +107,7 @@ STAGED_STRATEGY_RETRIEVAL_MODE=hybrid
 | --- | --- |
 | `INTERN_API_BASE` | 可选的模型接口完整地址，默认使用 Intern API |
 | `MATHS_WEB_PORT` | Web 和后端共用端口，默认 `8010` |
+| `MATHS_WEB_BIND` | Docker 宿主机监听地址，默认 `0.0.0.0`；设为 `127.0.0.1` 可限制为本机访问 |
 | `MATHS_WEB_STATE_DIR` | 启动器记录及日志目录，默认 `local_state/web_launcher` |
 | `MATHS_QUESTION_DIR` | 题目附件目录，默认 `local_state/chat_questions` |
 | `MATHS_STARTUP_TIMEOUT` | 等待后端就绪的超时秒数，默认 `120` |
@@ -125,7 +126,7 @@ bash start.sh         # 检查、构建 React、启动 LangGraph 后端并监听
 
 检查内容包括依赖及版本冲突、模型 Key 是否存在、技能与策略资源、混合检索的本地模型离线推理、目录权限、Redis 配置和端口。检查不会调用远程解题模型，也不验证模型 Key 的有效性；提交题目后才会产生实际模型调用。
 
-看到 `[启动成功]` 后打开 [聊天页面](http://127.0.0.1:8010/chat/)，API 文档位于 [/docs](http://127.0.0.1:8010/docs)。修改端口后使用对应地址。
+服务默认监听 `0.0.0.0`（所有 IPv4 网卡）。看到 `[启动成功]` 后，本机可打开 [聊天页面](http://127.0.0.1:8010/chat/) 和 [/docs](http://127.0.0.1:8010/docs)；其他设备请使用服务器 IP 和对应端口访问。修改端口后使用对应地址。直接使用 `python -m agent_platform` 时，可通过 `--host 127.0.0.1` 限制为本机访问。
 
 启动成功后终端会持续显示后端日志。按 **Ctrl+C** 正常关闭本次启动的 LangGraph 后端及 Web 入口。React 构建产物由同一后端提供，不需要单独启动前端服务。
 
@@ -172,7 +173,7 @@ docker compose -f compose.web.yaml logs -f web
 docker compose -f compose.web.yaml down
 ```
 
-默认页面为 `http://127.0.0.1:8010/chat/`。`MATHS_WEB_PORT` 可修改宿主机端口；需要对外监听时显式设置 `MATHS_WEB_BIND`。
+默认监听所有宿主机 IPv4 网卡，本机页面为 `http://127.0.0.1:8010/chat/`。`MATHS_WEB_PORT` 可修改宿主机端口；仅允许本机访问时设置 `MATHS_WEB_BIND=127.0.0.1`。
 题目文件放在 Docker 命名卷 `web-data`；`down` 保留该卷，但当前会话/任务仍在进程内存中，重启不保留。
 容器日志通过 Docker 查看，完整模型挂载到 `/app/strategyrag/Qwen3-Embedding-0.6B`；不会自动下载权重。
 工具协议固定为 `off`，与 `start.sh` 默认一致。
@@ -265,7 +266,7 @@ npm --prefix client run build
 
 ## 使用边界
 
-- 当前面向本地单用户，绑定 `127.0.0.1`；公开部署需要另行配置身份认证与访问隔离。
+- 当前仍面向单用户，默认监听 `0.0.0.0`，没有公开访问认证；只在可信网络中开放，或用防火墙、反向代理和身份认证做好访问隔离。
 - 支持 PDF / Markdown 题目文件，扫描 PDF 的 OCR 尚不支持。
 - 取消或中断后可显式恢复任务；代码或配置更新可能导致旧检查点无法恢复。
 - `.env`、日志、聊天记录、题目附件、模型权重和生成结果不应提交 Git。

@@ -351,7 +351,7 @@ def preflight(port):
         print("[存储提示] 当前为进程内存存储，重启不会自动保留历史；需要持久化请配置 MATHS_CHAT_REDIS_URL。", flush=True)
     with socket.socket() as listener:
         try:
-            listener.bind(("127.0.0.1", port))
+            listener.bind(("0.0.0.0", port))
         except OSError as error:
             raise LauncherError(f"端口 {port} 无法监听：" + diagnostic(error)
                                 + "\n请检查端口是否被占用或缺少权限，必要时修改 MATHS_WEB_PORT；脚本不会停止已有服务。") from None

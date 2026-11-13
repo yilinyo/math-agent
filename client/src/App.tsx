@@ -4,7 +4,7 @@ import {
   MessageSquare, PanelRightOpen, Plus, RotateCcw, Sigma, SlidersHorizontal, Square, X,
 } from 'lucide-react';
 import {
-  ApiError, cancelTask, createSession, errorMessage, getHealth, getTask, getSessions, getSessionTasks, resumeTask,
+  ApiError, cancelTask, createSession, errorMessage, getHealth, getTask, getSessions, getSessionTasks, newIdempotencyKey, resumeTask,
   stageNames, statusNames, STAGES, submitTask, startQuestionBatch, taskPath, terminal, watchTask,
   type Health, type ResponseStyle, type Task, type TraceEvent,
 } from './api';
@@ -275,7 +275,7 @@ export default function App() {
         setSelected(session);
       }
       if (!pending.current || pending.current.session !== session || pending.current.problem !== problem || pending.current.style !== style) {
-        pending.current = { session, problem, style, key: crypto.randomUUID() };
+        pending.current = { session, problem, style, key: newIdempotencyKey() };
       }
       const task = await submitTask(session, problem, pending.current.key, style);
       updateTask(task);
