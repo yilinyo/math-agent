@@ -1,7 +1,9 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 from unittest.mock import Mock
 
 import pytest
@@ -11,6 +13,29 @@ spec = importlib.util.spec_from_file_location(
     "web_launcher", Path(__file__).resolve().parents[2] / "scripts/web_launcher.py")
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
+
+
+@pytest.mark.parametrize("shell", ["bash", "sh"])
+def test_conda_hooks_can_read_unset_prompt(shell, tmp_path, monkeypatch):
+    conda = tmp_path / "conda"
+    conda.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'printf \"%s\" \"$PS1\" >/dev/null' "
+        "'conda() { printf \"%s\" \"$PS1\" >/dev/null; }'\n"
+    )
+    conda.chmod(0o755)
+    python = tmp_path / "python"
+    python.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    python.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    for variable in ("PS1", "MATHS_PYTHON", "BASH_ENV", "ENV"):
+        monkeypatch.delenv(variable, raising=False)
+    result = subprocess.run(
+        [shell, str(launcher.ROOT / "start.sh"), "--help"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "scripts/web_launcher.py\n--help" in result.stdout
 
 
 def test_dotenv_is_data_and_exported_values_win(tmp_path, monkeypatch):

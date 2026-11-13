@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Support explicit `sh start.sh` before using Bash-only syntax.
+if [ -z "${BASH_VERSION:-}" ]; then
+    if ! command -v bash >/dev/null 2>&1; then
+        printf '[错误] 启动脚本需要 Bash，请先安装 bash。\n' >&2
+        exit 1
+    fi
+    exec bash "$0" "$@"
+fi
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -13,6 +21,8 @@ fi
 if command -v conda >/dev/null 2>&1; then
     printf '[环境选择] 使用 Conda 环境：%s\n' "${MATHS_CONDA_ENV:-intern}"
     # 激活后直接交给 Python，避免 conda run 拦截 Ctrl+C 并额外报告异常。
+    # Conda hooks may reference unset interactive variables such as PS1.
+    set +u
     if ! CONDA_HOOK="$(conda shell.bash hook)"; then
         printf '[错误] 无法初始化 Conda，请检查 Conda 安装。\n' >&2
         exit 1
@@ -22,6 +32,7 @@ if command -v conda >/dev/null 2>&1; then
         printf '[错误] 无法激活 Conda 环境：%s，请确认环境已创建。\n' "${MATHS_CONDA_ENV:-intern}" >&2
         exit 1
     fi
+    set -u
     exec python scripts/web_launcher.py "$@"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
