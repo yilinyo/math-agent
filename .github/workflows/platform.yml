@@ -64,10 +64,19 @@ jobs:
           fi
           export PATH="$(dirname "$MATHS_PYTHON"):$PATH"
           "$MATHS_PYTHON" --version
-          if [[ -z "$INTERN_API_KEY" ]]; then
-            echo '::error::请配置 GitHub Secret INTERN_API_KEY。'
-            exit 1
-          fi
+          # Empty GitHub Secrets must not shadow values from the project's .env.
+          for name in INTERN_API_KEY LANGSMITH_API_KEY; do
+            if [[ -z "${!name:-}" ]]; then unset "$name"; fi
+          done
+          "$MATHS_PYTHON" - <<'PY'
+          import os
+          from dotenv import load_dotenv
+
+          load_dotenv('.env', override=False)
+          if not os.environ.get('INTERN_API_KEY', '').strip():
+              raise SystemExit('请在 GitHub Secret 或项目 .env 中配置 INTERN_API_KEY；旧服务尚未停止。')
+          print('[模型连接] Key 已配置（GitHub Secret 或项目 .env），不会打印密钥。')
+          PY
           # start.sh uses this exact interpreter for both launcher and backend.
           bash start.sh stop
           # Keep the detached backend alive after the self-hosted runner finishes.

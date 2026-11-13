@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -39,3 +40,38 @@ def test_script_deployment_restarts_intern_and_preserves_backend(tmp_path, start
     if not start_exit:
         expected.append(f"{python}|runner-id|status")
     assert log.read_text().splitlines() == expected
+
+
+@pytest.mark.parametrize(
+    ("secret", "local", "expected"),
+    [("secret-value", "local-value", "secret-value"), ("", "local-value", "local-value"),
+     ("", "", None)],
+)
+def test_deployment_key_uses_secret_or_local_env_before_stopping(tmp_path, secret, local, expected):
+    workflow = yaml.load(
+        (Path(__file__).resolve().parents[2] / ".github/workflows/platform.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    command = workflow["jobs"]["startup"]["steps"][-1]["run"]
+    (tmp_path / ".env").write_text(f"INTERN_API_KEY={local}\n")
+    (tmp_path / "start.sh").write_text(
+        '"$MATHS_PYTHON" -c \'import os; from dotenv import load_dotenv; '
+        'load_dotenv(".env", override=False); '
+        'assert os.environ["INTERN_API_KEY"] == os.environ["EXPECTED_KEY"]\'\n'
+        'printf "%s\\n" "$*" >> "$CALL_LOG"\n'
+    )
+    log = tmp_path / "calls"
+    result = subprocess.run(
+        ["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "MATHS_PYTHON": sys.executable,
+             "INTERN_API_KEY": secret, "EXPECTED_KEY": expected or "",
+             "CALL_LOG": str(log)}, timeout=10,
+    )
+    if expected is None:
+        assert result.returncode != 0
+        assert not log.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert log.read_text().splitlines() == ["stop", "--background", "status"]
+    assert "secret-value" not in result.stdout + result.stderr
+    assert "local-value" not in result.stdout + result.stderr

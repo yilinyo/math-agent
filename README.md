@@ -200,8 +200,8 @@ runner 需提前准备 Conda `intern`、Python 依赖、Node.js、前端依赖�
 
 | 类型 | 名称 | 内容 |
 | --- | --- | --- |
-| Secret | `INTERN_API_KEY` | 必填，解题模型 Key |
-| Secret | `LANGSMITH_API_KEY` | 开启追踪时填写 |
+| Secret | `INTERN_API_KEY` | 解题模型 Key；未配置时读取服务器项目 `.env` 的同名值 |
+| Secret | `LANGSMITH_API_KEY` | 开启追踪时填写；未配置时读取服务器项目 `.env` 的同名值 |
 | Variable | `MATHS_DEPLOY_DIR` | 项目仓库绝对路径，默认 `/home/jovyan/maths/MathS-Agent` |
 | Variable | `MATHS_GIT_REMOTE` | 拉取代码的远程名称，默认 `origin`；需提前确认该远程指向目标仓库 |
 | Variable | `MATHS_PYTHON` | 默认 `/opt/conda/envs/intern/bin/python`，直接使用 intern 的解释器，无需查找或激活 conda 命令 |
@@ -212,7 +212,8 @@ runner 需提前准备 Conda `intern`、Python 依赖、Node.js、前端依赖�
 | Variable | `STAGED_STRATEGY_RETRIEVAL_ENABLED`、`STAGED_STRATEGY_RETRIEVAL_MODE` | 默认启用 hybrid 检索 |
 
 runner 固定匹配 `self-hosted`、`Linux`、`X64` 三个标签，需同时满足。
-Key 通过 GitHub Secrets 注入进程环境，不写入仓库；这些已导出的变量优先于项目 `.env`。
+非空 Key 通过 GitHub Secrets 注入进程环境，优先于项目 `.env`；未配置或为空时读取项目 `.env`，不输出密钥。
+停止旧服务前会确认 Secret 或 `.env` 中存在解题 Key，避免因缺少 Key 导致停机。
 项目 `.env` 继续提供启动器状态目录、题目存储、Redis 等其他配置，需与已有服务保持一致，才能定位和正常停止旧进程。
 执行顺序为：拉取代码、`bash start.sh stop`、`bash start.sh --background`、`bash start.sh status`，均使用 Conda `intern`。
 通过 `MATHS_PYTHON` 指定该环境的 Python，停止、启动和后端子进程均复用同一个解释器。
