@@ -13,10 +13,14 @@ def test_script_deployment_restarts_intern_and_preserves_backend(tmp_path, start
         (Path(__file__).resolve().parents[2] / ".github/workflows/platform.yml").read_text(),
         Loader=yaml.BaseLoader,
     )
-    assert set(workflow["on"]) == {"push", "workflow_dispatch"}
+    assert set(workflow["on"]) == {"push", "workflow_dispatch", "repository_dispatch"}
     assert workflow["on"]["push"]["branches"] == ["dev"]
+    assert workflow["on"]["repository_dispatch"]["types"] == ["gitcode-dev-push"]
     job = workflow["jobs"]["startup"]
-    assert job["if"] == "github.ref == 'refs/heads/dev'"
+    assert job["if"] == (
+        "github.ref == 'refs/heads/dev' || "
+        "(github.event_name == 'repository_dispatch' && github.event.action == 'gitcode-dev-push')"
+    )
     assert all("uses" not in step for step in job["steps"])
     command = job["steps"][-1]["run"]
     assert '/opt/conda/envs/intern/bin/python' in job['env']['MATHS_PYTHON']

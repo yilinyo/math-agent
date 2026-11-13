@@ -191,6 +191,7 @@ GPU 配置默认从上海交大 `cu128` 源安装 CUDA 版 PyTorch，并将 GPU 
 ## GitHub 部署
 
 `.github/workflows/platform.yml` 在 `dev` 分支收到 push 时自动触发，包括合并 PR（merge、squash、rebase）及直接推送；同时保留手动触发，手动运行时需选择 `dev`。
+也支持 `repository_dispatch` 事件 `gitcode-dev-push`，供外部服务通知部署；该事件需要默认分支 `main` 包含此工作流配置，部署时仍从 `MATHS_GIT_REMOTE` 拉取 `dev`。GitCode push 本身不会自动发送此事件，需要外部服务调用 GitHub 的 repository dispatch API。
 未合并的 PR 和其他分支不会自动部署。工作流在 self-hosted runner 的 Conda `intern` 环境中通过 `start.sh` 重启服务，同一部署任务串行运行。
 工作流不使用 `actions/checkout` 或 Docker，直接进入 `MATHS_DEPLOY_DIR` 指定的已有仓库，执行 `git pull --ff-only <remote> dev`。
 默认目录为 `/home/jovyan/maths/MathS-Agent`，默认远程为 `origin`。
