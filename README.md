@@ -187,7 +187,7 @@ GPU 配置默认从上海交大 `cu128` 源安装 CUDA 版 PyTorch，并将 GPU 
 宿主机不需要安装 Conda 或 Python CUDA 包。容器启动时检查 CUDA 可用性并打印设备名称，不可用则启动失败。
 检索模型自动选择 CUDA，其次 MPS，最后 CPU；GPU 加速的是本地嵌入检索，解题模型仍通过远程 API 调用。
 
-`.github/workflows/platform.yml` 仅在推送 `dev` 或选择 `dev` 手动运行时执行，在 self-hosted runner 构建并启动此容器。
+`.github/workflows/platform.yml` 仅支持手动触发，选择 `dev` 分支运行时，在 self-hosted runner 构建并启动此容器；推送代码不会自动触发。
 在 GitHub **Settings → Environments → dev** 配置下列 Secrets 和 Variables；也支持同名仓库级配置：
 
 | 类型 | 名称 | 内容 |
