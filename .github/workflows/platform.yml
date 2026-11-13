@@ -2,6 +2,8 @@ name: MathS-Agent dev script deploy
 on:
   push:
     branches: [dev]
+  repository_dispatch:
+    types: [gitcode-dev-push]
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   startup:
-    if: github.ref == 'refs/heads/dev'
+    if: github.ref == 'refs/heads/dev' || (github.event_name == 'repository_dispatch' && github.event.action == 'gitcode-dev-push')
     runs-on: [self-hosted, Linux, X64]
     environment: dev
     timeout-minutes: 40
