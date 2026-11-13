@@ -1,5 +1,7 @@
 name: MathS-Agent dev script deploy
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,17 +22,17 @@ jobs:
       MATHS_DEPLOY_DIR: ${{ vars.MATHS_DEPLOY_DIR || '/home/jovyan/maths/MathS-Agent' }}
       MATHS_GIT_REMOTE: ${{ vars.MATHS_GIT_REMOTE || 'origin' }}
       MATHS_PYTHON: ${{ vars.MATHS_PYTHON || '/opt/conda/envs/intern/bin/python' }}
-      MATHS_WEB_PORT: ${{ vars.MATHS_WEB_PORT || '8010' }}
-      MATHS_STARTUP_TIMEOUT: ${{ vars.MATHS_STARTUP_TIMEOUT || '180' }}
+      MATHS_WEB_PORT: ${{ vars.MATHS_WEB_PORT }}
+      MATHS_STARTUP_TIMEOUT: ${{ vars.MATHS_STARTUP_TIMEOUT }}
       INTERN_API_KEY: ${{ secrets.INTERN_API_KEY }}
-      INTERN_API_BASE: ${{ vars.INTERN_API_BASE || 'https://chat.intern-ai.org.cn/api/v1/chat/completions' }}
-      INTERN_MODEL: ${{ vars.INTERN_MODEL || 'intern-s2-preview' }}
+      INTERN_API_BASE: ${{ vars.INTERN_API_BASE }}
+      INTERN_MODEL: ${{ vars.INTERN_MODEL }}
       LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
-      LANGSMITH_TRACING: ${{ vars.LANGSMITH_TRACING || 'false' }}
-      LANGSMITH_PROJECT: ${{ vars.LANGSMITH_PROJECT || 'math-reasoning-dev' }}
-      LANGSMITH_ENDPOINT: ${{ vars.LANGSMITH_ENDPOINT || 'https://api.smith.langchain.com' }}
-      STAGED_STRATEGY_RETRIEVAL_ENABLED: ${{ vars.STAGED_STRATEGY_RETRIEVAL_ENABLED || 'true' }}
-      STAGED_STRATEGY_RETRIEVAL_MODE: ${{ vars.STAGED_STRATEGY_RETRIEVAL_MODE || 'hybrid' }}
+      LANGSMITH_TRACING: ${{ vars.LANGSMITH_TRACING }}
+      LANGSMITH_PROJECT: ${{ vars.LANGSMITH_PROJECT }}
+      LANGSMITH_ENDPOINT: ${{ vars.LANGSMITH_ENDPOINT }}
+      STAGED_STRATEGY_RETRIEVAL_ENABLED: ${{ vars.STAGED_STRATEGY_RETRIEVAL_ENABLED }}
+      STAGED_STRATEGY_RETRIEVAL_MODE: ${{ vars.STAGED_STRATEGY_RETRIEVAL_MODE }}
     steps:
       - name: 在指定项目目录更新 dev 代码
         working-directory: ${{ runner.temp }}
@@ -54,7 +56,7 @@ jobs:
             exit 1
           fi
           GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 git pull --ff-only "$MATHS_GIT_REMOTE" dev
-          git log -1 --format='%h %s'
+          git log -1 --format='[部署版本] commit=%H 提交者=%cn 提交时间=%cI 说明=%s'
       - name: 使用 Conda intern 停止并重启服务
         run: |
           set -euo pipefail
@@ -64,8 +66,11 @@ jobs:
           fi
           export PATH="$(dirname "$MATHS_PYTHON"):$PATH"
           "$MATHS_PYTHON" --version
-          # Empty GitHub Secrets must not shadow values from the project's .env.
-          for name in INTERN_API_KEY LANGSMITH_API_KEY; do
+          # Empty GitHub configuration must not shadow the project's .env.
+          for name in INTERN_API_KEY INTERN_API_BASE INTERN_MODEL \
+            LANGSMITH_API_KEY LANGSMITH_TRACING LANGSMITH_PROJECT LANGSMITH_ENDPOINT \
+            MATHS_WEB_PORT MATHS_STARTUP_TIMEOUT \
+            STAGED_STRATEGY_RETRIEVAL_ENABLED STAGED_STRATEGY_RETRIEVAL_MODE; do
             if [[ -z "${!name:-}" ]]; then unset "$name"; fi
           done
           "$MATHS_PYTHON" - <<'PY'
