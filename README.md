@@ -188,9 +188,10 @@ GPU 配置默认从上海交大 `cu128` 源安装 CUDA 版 PyTorch，并将 GPU 
 宿主机不需要安装 Conda 或 Python CUDA 包。容器启动时检查 CUDA 可用性并打印设备名称，不可用则启动失败。
 检索模型自动选择 CUDA，其次 MPS，最后 CPU；GPU 加速的是本地嵌入检索，解题模型仍通过远程 API 调用。
 
-## GitHub 手动部署
+## GitHub 部署
 
-`.github/workflows/platform.yml` 仅支持手动触发，选择 `dev` 分支运行时，在 self-hosted runner 的 Conda `intern` 环境中通过 `start.sh` 重启服务；推送代码不会自动触发。
+`.github/workflows/platform.yml` 在 `dev` 分支收到 push 时自动触发，包括合并 PR（merge、squash、rebase）及直接推送；同时保留手动触发，手动运行时需选择 `dev`。
+未合并的 PR 和其他分支不会自动部署。工作流在 self-hosted runner 的 Conda `intern` 环境中通过 `start.sh` 重启服务，同一部署任务串行运行。
 工作流不使用 `actions/checkout` 或 Docker，直接进入 `MATHS_DEPLOY_DIR` 指定的已有仓库，执行 `git pull --ff-only <remote> dev`。
 默认目录为 `/home/jovyan/maths/MathS-Agent`，默认远程为 `origin`。
 请提前在该目录克隆项目、切换到 `dev` 并配置 runner 用户的 Git 拉取凭据。仓库存在已跟踪文件的未提交改动或无法快进时，更新会失败，不自动覆盖。
@@ -206,13 +207,15 @@ runner 需提前准备 Conda `intern`、Python 依赖、Node.js、前端依赖�
 | Variable | `MATHS_GIT_REMOTE` | 拉取代码的远程名称，默认 `origin`；需提前确认该远程指向目标仓库 |
 | Variable | `MATHS_PYTHON` | 默认 `/opt/conda/envs/intern/bin/python`，直接使用 intern 的解释器，无需查找或激活 conda 命令 |
 | Variable | `INTERN_MODEL`、`INTERN_API_BASE` | 模型名称和可选接口地址 |
-| Variable | `MATHS_WEB_PORT` | 服务端口，默认 `8010` |
-| Variable | `MATHS_STARTUP_TIMEOUT` | 等待就绪时间，默认 `180` 秒 |
+| Variable | `MATHS_WEB_PORT` | 服务端口；未配置时读取服务器 `.env` |
+| Variable | `MATHS_STARTUP_TIMEOUT` | 等待就绪时间；未配置时读取服务器 `.env` |
 | Variable | `LANGSMITH_TRACING`、`LANGSMITH_PROJECT`、`LANGSMITH_ENDPOINT` | 可选追踪配置 |
-| Variable | `STAGED_STRATEGY_RETRIEVAL_ENABLED`、`STAGED_STRATEGY_RETRIEVAL_MODE` | 默认启用 hybrid 检索 |
+| Variable | `STAGED_STRATEGY_RETRIEVAL_ENABLED`、`STAGED_STRATEGY_RETRIEVAL_MODE` | 检索开关与模式；未配置时读取服务器 `.env` |
 
 runner 固定匹配 `self-hosted`、`Linux`、`X64` 三个标签，需同时满足。
 非空 Key 通过 GitHub Secrets 注入进程环境，优先于项目 `.env`；未配置或为空时读取项目 `.env`，不输出密钥。
+端口、模型、超时、LangSmith 和检索配置同样遵循“非空 GitHub 配置优先，否则读取 `.env`”，CI 不注入固定应用默认值；显式设置的 `false`、`0` 会保留。
+若 GitHub 和 `.env` 均未配置某项，沿用应用本身的默认行为。部署目录、远程名称和解释器路径仍使用上表中约定的部署默认值。
 停止旧服务前会确认 Secret 或 `.env` 中存在解题 Key，避免因缺少 Key 导致停机。
 项目 `.env` 继续提供启动器状态目录、题目存储、Redis 等其他配置，需与已有服务保持一致，才能定位和正常停止旧进程。
 执行顺序为：拉取代码、`bash start.sh stop`、`bash start.sh --background`、`bash start.sh status`，均使用 Conda `intern`。
