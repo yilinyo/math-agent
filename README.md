@@ -84,6 +84,8 @@ npm --prefix client ci
 - `strategy_data/`：策略元数据、词法索引、向量矩阵及索引清单，条数与策略顺序必须一致。
 - `skill2_en/`、`skill2/`：数学技能材料。
 
+`model.safetensors` 由本地独立管理，不纳入 Git 跟踪；拉取代码不会提供权重，需要提前放入上述目录。
+
 启动器不会下载模型、安装依赖或重建索引。若只使用词法检索，可在 `.env` 中设置 `STAGED_STRATEGY_RETRIEVAL_MODE=lexical`，无需嵌入模型及 `requirements-platform-m5.txt` 中的可选依赖。
 
 ## 配置
