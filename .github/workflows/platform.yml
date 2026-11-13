@@ -1,0 +1,75 @@
+name: MathS-Agent dev script deploy
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: maths-dev-deploy
+  cancel-in-progress: false
+jobs:
+  startup:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: [self-hosted, Linux, X64]
+    environment: dev
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ vars.MATHS_DEPLOY_DIR || '/home/jovyan/maths/MathS-Agent' }}
+    env:
+      MATHS_DEPLOY_DIR: ${{ vars.MATHS_DEPLOY_DIR || '/home/jovyan/maths/MathS-Agent' }}
+      MATHS_GIT_REMOTE: ${{ vars.MATHS_GIT_REMOTE || 'origin' }}
+      MATHS_PYTHON: ${{ vars.MATHS_PYTHON || '/opt/conda/envs/intern/bin/python' }}
+      MATHS_WEB_PORT: ${{ vars.MATHS_WEB_PORT || '8010' }}
+      MATHS_STARTUP_TIMEOUT: ${{ vars.MATHS_STARTUP_TIMEOUT || '180' }}
+      INTERN_API_KEY: ${{ secrets.INTERN_API_KEY }}
+      INTERN_API_BASE: ${{ vars.INTERN_API_BASE || 'https://chat.intern-ai.org.cn/api/v1/chat/completions' }}
+      INTERN_MODEL: ${{ vars.INTERN_MODEL || 'intern-s2-preview' }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_TRACING: ${{ vars.LANGSMITH_TRACING || 'false' }}
+      LANGSMITH_PROJECT: ${{ vars.LANGSMITH_PROJECT || 'math-reasoning-dev' }}
+      LANGSMITH_ENDPOINT: ${{ vars.LANGSMITH_ENDPOINT || 'https://api.smith.langchain.com' }}
+      STAGED_STRATEGY_RETRIEVAL_ENABLED: ${{ vars.STAGED_STRATEGY_RETRIEVAL_ENABLED || 'true' }}
+      STAGED_STRATEGY_RETRIEVAL_MODE: ${{ vars.STAGED_STRATEGY_RETRIEVAL_MODE || 'hybrid' }}
+    steps:
+      - name: 在指定项目目录更新 dev 代码
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MATHS_DEPLOY_DIR" || "$MATHS_DEPLOY_DIR" != /* || ! -d "$MATHS_DEPLOY_DIR" ]]; then
+            echo '::error::请配置 MATHS_DEPLOY_DIR 为 runner 上已有项目目录的绝对路径。'
+            exit 1
+          fi
+          cd "$MATHS_DEPLOY_DIR"
+          if [[ "$(git rev-parse --show-toplevel)" != "$(pwd -P)" ]]; then
+            echo '::error::MATHS_DEPLOY_DIR 必须是 Git 仓库根目录。'
+            exit 1
+          fi
+          if [[ "$(git branch --show-current)" != dev ]]; then
+            echo '::error::指定目录必须提前切换到 dev 分支。'
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            echo '::error::项目有未提交的已跟踪文件改动，请先处理后重试。'
+            exit 1
+          fi
+          GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 git pull --ff-only "$MATHS_GIT_REMOTE" dev
+          git log -1 --format='%h %s'
+      - name: 使用 Conda intern 停止并重启服务
+        run: |
+          set -euo pipefail
+          if [[ "$MATHS_PYTHON" != /* || ! -x "$MATHS_PYTHON" ]]; then
+            echo '::error::找不到 intern 的 Python，请配置 MATHS_PYTHON 为解释器绝对路径。'
+            exit 1
+          fi
+          export PATH="$(dirname "$MATHS_PYTHON"):$PATH"
+          "$MATHS_PYTHON" --version
+          if [[ -z "$INTERN_API_KEY" ]]; then
+            echo '::error::请配置 GitHub Secret INTERN_API_KEY。'
+            exit 1
+          fi
+          # start.sh uses this exact interpreter for both launcher and backend.
+          bash start.sh stop
+          # Keep the detached backend alive after the self-hosted runner finishes.
+          RUNNER_TRACKING_ID='' bash start.sh --background
+          bash start.sh status
