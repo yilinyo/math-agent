@@ -188,27 +188,39 @@ GPU 配置默认从上海交大 `cu128` 源安装 CUDA 版 PyTorch，并将 GPU 
 宿主机不需要安装 Conda 或 Python CUDA 包。容器启动时检查 CUDA 可用性并打印设备名称，不可用则启动失败。
 检索模型自动选择 CUDA，其次 MPS，最后 CPU；GPU 加速的是本地嵌入检索，解题模型仍通过远程 API 调用。
 
-`.github/workflows/platform.yml` 仅支持手动触发，选择 `dev` 分支运行时，在 self-hosted runner 构建并启动此容器；推送代码不会自动触发。
+## GitHub 手动部署
+
+`.github/workflows/platform.yml` 仅支持手动触发，选择 `dev` 分支运行时，在 self-hosted runner 的 Conda `intern` 环境中通过 `start.sh` 重启服务；推送代码不会自动触发。
+工作流不使用 `actions/checkout` 或 Docker，直接进入 `MATHS_DEPLOY_DIR` 指定的已有仓库，执行 `git pull --ff-only <remote> dev`。
+默认目录为 `/home/jovyan/maths/MathS-Agent`，默认远程为 `origin`。
+请提前在该目录克隆项目、切换到 `dev` 并配置 runner 用户的 Git 拉取凭据。仓库存在已跟踪文件的未提交改动或无法快进时，更新会失败，不自动覆盖。
+runner 需提前准备 Conda `intern`、Python 依赖、Node.js、前端依赖，以及项目内的完整模型、策略索引和技能材料。
+拉取时跳过 LFS 下载，复用项目中已有模型。此目录不应同时供其他更新任务修改。
 在 GitHub **Settings → Environments → dev** 配置下列 Secrets 和 Variables；也支持同名仓库级配置：
 
 | 类型 | 名称 | 内容 |
 | --- | --- | --- |
 | Secret | `INTERN_API_KEY` | 必填，解题模型 Key |
 | Secret | `LANGSMITH_API_KEY` | 开启追踪时填写 |
-| Variable | `MATHS_MODEL_DIR` | 必填，Docker 宿主机上的完整模型目录绝对路径，例如 `/opt/models/Qwen3-Embedding-0.6B` |
-| Variable | `MATHS_USE_GPU` | NVIDIA GPU 服务器设置 `true`，自动启用 GPU 配置及 cu128 PyTorch 下载源；默认关闭 |
-| Variable | `TORCH_INDEX_URL` | 可选，覆盖 CPU/CUDA PyTorch 下载源，需与显卡驱动兼容 |
+| Variable | `MATHS_DEPLOY_DIR` | 项目仓库绝对路径，默认 `/home/jovyan/maths/MathS-Agent` |
+| Variable | `MATHS_GIT_REMOTE` | 拉取代码的远程名称，默认 `origin`；需提前确认该远程指向目标仓库 |
+| Variable | `MATHS_PYTHON` | 默认 `/opt/conda/envs/intern/bin/python`，直接使用 intern 的解释器，无需查找或激活 conda 命令 |
 | 仓库级 Variable | `MATHS_RUNNER_LABELS` | 可选，标签 JSON 数组，例如 `["self-hosted","Linux","math-agent"]`；默认 `["self-hosted"]` |
 | Variable | `INTERN_MODEL`、`INTERN_API_BASE` | 模型名称和可选接口地址 |
-| Variable | `MATHS_WEB_PORT` | 检查端口，默认 `18010`，避免与常驻服务冲突 |
+| Variable | `MATHS_WEB_PORT` | 服务端口，默认 `8010` |
 | Variable | `MATHS_STARTUP_TIMEOUT` | 等待就绪时间，默认 `180` 秒 |
 | Variable | `LANGSMITH_TRACING`、`LANGSMITH_PROJECT`、`LANGSMITH_ENDPOINT` | 可选追踪配置 |
 | Variable | `STAGED_STRATEGY_RETRIEVAL_ENABLED`、`STAGED_STRATEGY_RETRIEVAL_MODE` | 默认启用 hybrid 检索 |
 
-CI 不读取 runner 本地 `.env`，Key 仅通过容器运行环境传入，不参与镜像构建。
-流水线不再执行原先独立的配置检查、前端测试、后端静态检查或完整测试；构建失败或容器健康检查失败时流水线失败。
-它等待 `/health/ready` 和 `/chat/` 检查通过，输出容器日志，再关闭本次检查容器；项目名固定为 `maths-dev-check`，与常驻服务隔离。
-流水线不会保持 Web 常驻，也不会提交题目、验证 API Key 有效性或执行向量推理验证。需要常驻时在宿主机执行上面的 `up -d` 命令。
+Key 通过 GitHub Secrets 注入进程环境，不写入仓库；这些已导出的变量优先于项目 `.env`。
+项目 `.env` 继续提供启动器状态目录、题目存储、Redis 等其他配置，需与已有服务保持一致，才能定位和正常停止旧进程。
+执行顺序为：拉取代码、`bash start.sh stop`、`bash start.sh --background`、`bash start.sh status`，均使用 Conda `intern`。
+通过 `MATHS_PYTHON` 指定该环境的 Python，停止、启动和后端子进程均复用同一个解释器。
+启动脚本负责依赖与资源检查、前端构建和后端健康检查；任一步骤失败则流水线失败，不自动回滚。
+只在后台启动命令上清空 `RUNNER_TRACKING_ID`，防止 self-hosted runner 在任务结束后清理本次启动的后台进程。服务继续运行，日志保存在启动器配置的 `runtime.log` 中。
+停止命令只停止当前启动器进程记录所指向的服务，不会按端口杀死其他进程，也不会停止 Docker 容器。
+该工作流不再安装或更换 PyTorch；GPU 是否可用取决于 `intern` 中的 PyTorch 与宿主机驱动是否兼容。
+流水线不会运行完整测试或提交题目，不验证 API Key 有效性；启动器会按配置执行本地向量推理验证。
 本地仍可运行 `python scripts/check_platform_ci.py` 完成完整工程检查。
 
 ## 聊天记录持久化
