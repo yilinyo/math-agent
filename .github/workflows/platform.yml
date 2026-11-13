@@ -9,7 +9,7 @@ concurrency:
 jobs:
   startup:
     if: github.ref == 'refs/heads/dev'
-    runs-on: ${{ fromJSON(vars.MATHS_RUNNER_LABELS || '["self-hosted"]') }}
+    runs-on: [self-hosted, Linux, X64]
     environment: dev
     timeout-minutes: 40
     defaults:

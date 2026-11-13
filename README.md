@@ -205,13 +205,13 @@ runner 需提前准备 Conda `intern`、Python 依赖、Node.js、前端依赖�
 | Variable | `MATHS_DEPLOY_DIR` | 项目仓库绝对路径，默认 `/home/jovyan/maths/MathS-Agent` |
 | Variable | `MATHS_GIT_REMOTE` | 拉取代码的远程名称，默认 `origin`；需提前确认该远程指向目标仓库 |
 | Variable | `MATHS_PYTHON` | 默认 `/opt/conda/envs/intern/bin/python`，直接使用 intern 的解释器，无需查找或激活 conda 命令 |
-| 仓库级 Variable | `MATHS_RUNNER_LABELS` | 可选，标签 JSON 数组，例如 `["self-hosted","Linux","math-agent"]`；默认 `["self-hosted"]` |
 | Variable | `INTERN_MODEL`、`INTERN_API_BASE` | 模型名称和可选接口地址 |
 | Variable | `MATHS_WEB_PORT` | 服务端口，默认 `8010` |
 | Variable | `MATHS_STARTUP_TIMEOUT` | 等待就绪时间，默认 `180` 秒 |
 | Variable | `LANGSMITH_TRACING`、`LANGSMITH_PROJECT`、`LANGSMITH_ENDPOINT` | 可选追踪配置 |
 | Variable | `STAGED_STRATEGY_RETRIEVAL_ENABLED`、`STAGED_STRATEGY_RETRIEVAL_MODE` | 默认启用 hybrid 检索 |
 
+runner 固定匹配 `self-hosted`、`Linux`、`X64` 三个标签，需同时满足。
 Key 通过 GitHub Secrets 注入进程环境，不写入仓库；这些已导出的变量优先于项目 `.env`。
 项目 `.env` 继续提供启动器状态目录、题目存储、Redis 等其他配置，需与已有服务保持一致，才能定位和正常停止旧进程。
 执行顺序为：拉取代码、`bash start.sh stop`、`bash start.sh --background`、`bash start.sh status`，均使用 Conda `intern`。
