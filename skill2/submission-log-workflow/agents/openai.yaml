@@ -1,0 +1,7 @@
+interface:
+  display_name: "Submission Log Workflow"
+  short_description: "记录 main 到 judge 的提交、日志和真实评测分数"
+  default_prompt: "Use $submission-log-workflow to record and validate a main-to-judge submission log."
+
+policy:
+  allow_implicit_invocation: true

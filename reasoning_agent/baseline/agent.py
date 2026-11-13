@@ -2,8 +2,18 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from lagent.agents import Agent
-from lagent.schema import AgentMessage
+from reasoning_agent.max_token_retry import call_with_max_token_retry, build_retry_max_token_schedule
+
+def Agent(*args, **kwargs):
+    # The optional legacy runtime is not needed to import its configuration.
+    from lagent.agents import Agent as LegacyAgent
+    return LegacyAgent(*args, **kwargs)
+
+
+def AgentMessage(*args, **kwargs):
+    from lagent.schema import AgentMessage as LegacyMessage
+    return LegacyMessage(*args, **kwargs)
+
 
 
 POLICY_PROMPT = """你是一个严谨的数学推理智能体。
@@ -33,7 +43,7 @@ class BaselineConfig:
     verifier_voting_times: int = 2
     policy_temperature: float = 0.6
     verifier_temperature: float = 0.0
-    max_tokens: int = 4096
+    max_tokens: int = 32768
 
 
 class BaselineAgent:
@@ -73,6 +83,7 @@ class BaselineAgent:
             )
             scored_candidates.append(
                 {
+                    "candidate_id": candidate_id,
                     "content": candidate,
                     "confidence_score": confidence,
                 }
@@ -83,7 +94,10 @@ class BaselineAgent:
         trace.append(
             {
                 "step": "select_final_response",
-                "content": f"Selected candidate with confidence {best['confidence_score']:.3f}.",
+                "content": {
+                    "candidate_id": best["candidate_id"],
+                    "confidence_score": round(best["confidence_score"], 3),
+                },
             }
         )
         return {
@@ -99,19 +113,25 @@ class BaselineAgent:
                 sender="user",
                 content=f"题目：\n{problem}\n\n请给出完整解答。候选编号：{sample_id}",
             )
-            response = self.policy_agent(
+            response = call_with_max_token_retry(
+                self.policy_agent,
                 user_message,
                 session_id=f"{idx}:policy:{sample_id}",
                 temperature=self.config.policy_temperature,
-                max_tokens=self.config.max_tokens,
+                max_token_schedule=build_retry_max_token_schedule(
+                    getattr(self.client, "retry", 3),
+                    initial_max_tokens=self.config.max_tokens,
+                ),
+                result_validator=self._ensure_non_empty_content,
             )
             candidates.append(response.content)
             trace.append(
                 {
                     "step": f"policy_call_{sample_id}",
                     "content": {
-                        "message": user_message.content,
-                        "response": response.content,
+                        "candidate_id": sample_id,
+                        "status": "completed",
+                        "response_chars": len(response.content),
                     },
                 }
             )
@@ -145,20 +165,27 @@ class BaselineAgent:
                 max_tokens=1024,
             )
             verdict = response.content
-            votes.append(self._is_correct_vote(verdict))
+            accepted = self._is_correct_vote(verdict)
+            votes.append(accepted)
             trace.append(
                 {
                     "step": f"verifier_call_{candidate_id}_{vote_id}",
                     "content": {
                         "candidate_id": candidate_id,
-                        "message": user_message.content,
-                        "response": verdict,
+                        "vote_id": vote_id,
+                        "accepted": accepted,
                     },
                 }
             )
 
         confidence = sum(votes) / len(votes) if votes else 0.0
         return confidence, trace
+
+    @staticmethod
+    def _ensure_non_empty_content(response: Any) -> None:
+        content = getattr(response, "content", "")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("empty model response")
 
     @staticmethod
     def _is_correct_vote(verdict: str) -> bool:

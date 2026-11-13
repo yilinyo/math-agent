@@ -1,48 +1,89 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Application Structure
 
-This repository is a Python baseline for the Challenge Cup reasoning-agent task. The platform entrypoint is `user_agent.py`, which exports `ReasoningAgent` from `reasoning_agent/factory.py`. Core implementations live under `reasoning_agent/`: `baseline/` contains the older lagent-based generate-verify-select agent, while `custom/` contains the active custom agent, prompts, parsers, tools, runner state, and verifier logic. `main.py` is the local JSONL runner. Sample inputs are in `sample_data/`, generated local outputs go to `sample_outputs/`, and design notes live in `docs/`.
+This repository is a standalone math reasoning Web application. The backend
+entrypoints are `python -m agent_platform` for local use and
+`python -m agent_platform.deployment` for distributed deployments.
+`client/` contains the React/TypeScript frontend. `agent_platform/` owns HTTP,
+SSE, task orchestration, attachments, persistence, and presentation.
+`reasoning_agent/` supplies shared reasoning code, prompts, parsers, and tools.
+The Web workflow is defined in `agent_platform/agent/graph.py`, with independent
+stage entries in `agent_platform/agent/nodes/` and unchanged state/routing definitions.
+`agent_platform/reasoning_runtime.py` adapts the graph to platform tasks;
+`bootstrap.py` assembles injected clients and tools. The old `graph_runtime`
+and `staged_adapter` imports remain compatibility entries. Persistence and
+public answer rendering live in `agent_platform/storage/` and `presentation/`.
+See `docs/math-agent-module-structure.md` for migration and checkpoint identity
+constraints. Do not regenerate the migration fingerprint for behavioral edits.
 
-## Build, Test, and Development Commands
+The competition submission entrypoint, JSONL runner, and offline evaluation
+tools were removed. Do not recreate them unless explicitly requested.
 
-Install dependencies:
+Shared code under `reasoning_agent/custom/`, `custom2/`, and `action_graph/`
+is still imported by the backend. Resolve actual dependencies before removing
+historical implementations. Preserve solver audit, verification, and repair:
+these are application behavior, not offline evaluation.
 
-```bash
-pip install -r requirements.txt
-```
+## Development
 
-Run the sample dataset locally:
+Use Python 3.11 and Node.js >=22.12. Install backend dependencies with
+`pip install -r requirements.txt`; install development tools with
+`pip install -r requirements-platform-dev.txt`.
+The optional local embedding/RAG dependencies are in
+`requirements-platform-m5.txt`.
 
-```bash
-export INTERN_API_KEY="sk-..."
-python main.py --input_file sample_data/dev.jsonl --output_dir sample_outputs
-```
+Build the frontend with `npm ci` and `npm run build` inside `client/`.
+Run `python -m agent_platform --port 8010` for a Fake demo without model calls.
+For real solving, use the explicit langgraph client-provider command in README.
+Keep the existing client injection boundary: model clients are constructed in
+trusted application bootstrap code, never inside reasoning nodes or the browser.
 
-Switch agent implementations when debugging:
+Run `python -m pytest -q`, then `npm test` and `npm run build` in `client/`.
+The full CI script is `python scripts/check_platform_ci.py`; PostgreSQL tests
+require a dedicated disposable `MATHS_TEST_DATABASE_URL`. No live model call
+is needed for deterministic regression tests.
 
-```bash
-REASONING_AGENT_MODE=baseline python main.py --input_file sample_data/dev.jsonl --output_dir sample_outputs
-```
+## Code And API Contracts
 
-Limit local concurrency for API rate limits:
+Use Python 3, four-space indentation, snake_case functions/modules and
+PascalCase classes. Prefer small modules and typed interfaces.
+Preserve HTTP/SSE contracts, task idempotency, cancellation, history isolation,
+checkpoint validation, and answer rendering when refactoring.
+Keep task responses, traces, errors, and checkpoints JSON-safe and sanitized.
+Never expose prompts, raw private model responses, credentials, or local paths.
 
-```bash
-export LOCAL_MAX_CONCURRENCY=4
-```
+Do not hardcode fallback behavior for specific problems, answers, constants,
+keywords, metadata indices, or judge examples. Fallbacks must derive from the
+current problem, accepted reasoning state, and declared protocol constraints.
 
-## Coding Style & Naming Conventions
+## Data, Secrets, And Local Services
 
-Use Python 3 style with 4-space indentation, type hints where they clarify interfaces, and small modules grouped by responsibility. Keep `ReasoningAgent(client=...)` and `solve(problem: str, metadata: dict) -> dict` stable; the evaluator depends on that contract. Prefer `snake_case` for functions, variables, files, and trace step names, and `PascalCase` for classes and dataclasses. Do not hardcode API keys, local absolute paths, hidden answers, or judge-specific behavior.
+Keep credentials in backend environment variables such as `INTERN_API_KEY`.
+Do not put secrets in source files, frontend bundles, or `VITE_*` variables.
+The default deployment is local and single-user; do not claim public
+authentication or multi-user ownership is implemented.
 
-## Testing Guidelines
+Preserve `local_state/`, Redis data, question files, and existing chat history.
+Do not stop or restart shared services during cleanup or tests.
+Use isolated ports, storage namespaces, and disposable databases for smoke tests.
 
-There is no committed unit-test framework yet. Treat the local runner as the minimum regression check and confirm every changed agent returns a JSON-serializable dict with a non-empty string `final_response`. If adding tests, place them under `tests/`, name files `test_*.py`, and prefer deterministic parser, verifier, and formatting tests that do not require live API calls.
+Do not stage or commit datasets, reference answers, generated outputs, logs,
+raw responses, caches, local environments, or model weights. This includes
+`sample_data/`, `sample_outputs/`, `val_outputs/`, `outputs/`,
+`run_outputs/`, and `local_state/`. Existing tracked artifacts need a
+separate reviewed publishing cleanup; ignore rules alone do not untrack them.
+Preserve required strategy corpora and skill handbooks unless replacing their
+runtime dependencies.
 
-## Commit & Pull Request Guidelines
+## Commits And Documentation
 
-The existing history uses short conventional-style messages, for example `docs: move competition guide to README`. Follow `type: summary` where practical (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`). Pull requests should describe the agent behavior change, list validation commands run, note new dependencies or environment variables, and include sample output snippets when output formatting changes.
+Inspect `git status` and the staged file list before committing.
+Never use `git add .` in place of reviewing source/config/test changes.
+Use conventional messages such as `fix:`, `docs:`, and `refactor:`.
+Do not commit or push unless requested.
 
-## Security & Configuration Tips
-
-Keep secrets in environment variables such as `INTERN_API_KEY`. Use relative paths for project files, and ensure generated outputs, caches, and IDE files are not required for evaluation.
+README and this file describe the current application. Older handoff notes and
+design validation records are historical and do not restore removed competition
+requirements. Keep current setup instructions aligned with actual dependencies.
+Report checks run and real limitations; do not invent accuracy or performance.

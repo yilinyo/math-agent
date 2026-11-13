@@ -1,226 +1,215 @@
-# Challenge Cup 2026 Reasoning Agent
+# MathS-Agent
 
-本仓库是挑战杯人工智能赛道初赛的数学推理智能体模板。目标是实现一个满足平台入口约定的 `ReasoningAgent`，接收数学题文本和题目元信息，调用 Intern-S 系列模型或本地推理逻辑，返回最终答案。
+基于 React、FastAPI 和 LangGraph 的数学推理 Web 应用，支持聊天解题、公式展示、题目文件上传、任务进度、取消与恢复。平台负责运行任务，Agent 负责推理，LangGraph 定义节点与路由。
 
-平台评测时会从仓库根目录的 `user_agent.py` 加载：
-
-```python
-from user_agent import ReasoningAgent
-
-agent = ReasoningAgent(client=official_client)
-result = agent.solve(problem: str, metadata: dict)
-```
-
-`solve` 必须返回可 JSON 序列化的字典，并包含非空字符串字段 `final_response`：
-
-```python
-{
-    "final_response": "最终答案",
-    "trace": [{"step": "finalize", "content": {"answer": "..."}}],
-}
-```
-
-## 仓库目录结构
+## 项目结构
 
 ```text
-.
-├── user_agent.py                    # 平台固定入口，导出 ReasoningAgent
-├── main.py                          # 本地 JSONL 调试 runner
-├── llm_client.py                    # 本地 Intern-S API client 示例
-├── requirements.txt                 # Python 依赖
-├── sample_data/
-│   └── dev.jsonl                    # 本地调试样例题
-├── sample_outputs/                  # 本地运行输出目录
-├── docs/
-│   └── reasoning-agent-design.md    # 设计说明
-└── reasoning_agent/
-    ├── factory.py                   # 根据模式选择具体 agent
-    ├── baseline/                    # lagent 版多候选 baseline
-    └── custom/                      # 默认自定义 agent
-        ├── agent.py                 # CustomAgent 入口
-        ├── config.py                # 调用次数、token、trace 等配置
-        ├── parsers/                 # 模型输出、JSON、最终答案解析
-        ├── prompts/                 # 系统提示词和工具调用提示词
-        ├── runner/                  # ReAct 风格循环与上下文管理
-        ├── tools/                   # 工具注册与执行器
-        └── verifier/                # 答案校验与修复逻辑
+client/                         # React + TypeScript 前端
+agent_platform/
+├── app.py                      # HTTP / SSE 接口
+├── service.py                  # 任务调度、并发、取消与恢复
+├── bootstrap.py                # 注入模型客户端和工具
+├── runtime.py                  # 平台与 Agent 的运行接口
+├── reasoning_runtime.py        # 将平台任务接入 LangGraph
+├── observability.py            # LangSmith 追踪与数据脱敏
+├── agent/
+│   ├── graph.py                # StateGraph、节点注册与条件边
+│   ├── state.py                # 图状态与检查点结构
+│   ├── routing.py              # 条件路由规则
+│   ├── dependencies.py         # 模型、工具等依赖接口
+│   ├── execution.py            # 节点执行、取消、模型调用和检查点边界
+│   ├── stage_engine.py         # 各阶段共享推理逻辑
+│   ├── checkpoint.py           # 检查点恢复与兼容校验
+│   ├── nodes/
+│   │   ├── profile.py          # 题目分析
+│   │   ├── retrieve.py         # 策略检索
+│   │   ├── plan.py             # 解题规划
+│   │   ├── solve.py            # 生成解答
+│   │   ├── tool.py             # 本地工具核验
+│   │   ├── verify.py           # 校验与审查
+│   │   ├── repair.py           # 修复解答
+│   │   ├── emergency.py        # 紧急恢复
+│   │   ├── arbitrate.py        # 候选答案仲裁
+│   │   └── finalize.py         # 整理最终答案
+│   ├── prompts/               # 现有提示词的兼容入口
+│   ├── schemas/               # 结构化模型输出入口
+│   ├── retrieval/             # 词法、向量和融合检索入口
+│   └── tools/                 # 注入工具的接口入口
+├── tools/                     # 工具注册、数学计算、隔离执行与 MCP
+├── storage/                   # 内存、Redis、PostgreSQL 存储
+├── presentation/              # 答案整理与公开输出
+└── static/chat/               # 前端构建产物，由后端提供
+reasoning_agent/               # 复用的推理代码、提示词、解析器与检索实现
+strategy_data/                 # 策略元数据、词法索引与向量索引
+strategyrag/                   # 本地嵌入模型资源
+skill2_en/                     # 英文数学技能材料
+skill2/                        # 中文回退技能材料
+tests/
+├── unit/                      # 单元测试
+├── integration/               # 图运行与平台集成测试
+└── e2e/                       # Web 流程测试
+scripts/web_launcher.py        # 启动检查、前端构建、进程和日志管理
+start.sh                       # 一键启动入口
+.env.example                   # 中文配置模板
+local_state/                   # 本地日志、进程记录与题目附件，不提交 Git
 ```
 
-## 安装与本地调试
+`reasoning_runtime.py` 编译并运行 `agent/graph.py` 构建的图。节点按条件路由执行，修复、紧急恢复和仲裁按需进入，并非所有节点每次都会运行。
 
-安装依赖：
+提示词入口为 `agent_platform/agent/prompts/staged.py`，实际复用 `reasoning_agent/custom2/staged_prompts.py` 等共享模块；检索入口同样复用 `reasoning_agent/` 中的既有实现。目录拆分没有改变原有流程、提示词或 state 协议。检查点兼容约束见 [模块结构说明](docs/math-agent-module-structure.md)。
+
+## 环境准备
+
+需要 Python 3.11、Node.js >=22.12 和 npm。以下命令从项目根目录执行，适用于 macOS / Linux。
+
+首次使用且尚未创建环境时：
 
 ```bash
-pip install -r requirements.txt
+conda create -n intern python=3.11
 ```
 
-配置 API key：
+安装后端、策略混合检索和前端依赖：
 
 ```bash
-export INTERN_API_KEY="sk-..."
+conda activate intern
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-platform-m5.txt
+npm --prefix client ci
 ```
 
-运行样例数据：
+默认混合检索还需要以下本地资源：
+
+- `strategyrag/Qwen3-Embedding-0.6B/`：完整模型权重、模型配置和 tokenizer。
+- `strategy_data/`：策略元数据、词法索引、向量矩阵及索引清单，条数与策略顺序必须一致。
+- `skill2_en/`、`skill2/`：数学技能材料。
+
+启动器不会下载模型、安装依赖或重建索引。若只使用词法检索，可在 `.env` 中设置 `STAGED_STRATEGY_RETRIEVAL_MODE=lexical`，无需嵌入模型及 `requirements-platform-m5.txt` 中的可选依赖。
+
+## 配置
+
+首次配置时复制模板；已有 `.env` 会保留：
 
 ```bash
-python main.py --input_file sample_data/dev.jsonl --output_dir sample_outputs
+cp -n .env.example .env
 ```
 
-`main.py` 会读取 JSONL，每行一道题，并把每题结果保存为独立 JSON 文件。输出目录会自动带上时间戳和 agent 模式，例如：
+编辑本地 `.env`，至少填写模型 Key，并确认模型、端口和检索方式：
 
-```text
-sample_outputs/2026-06-24-011243-custom/0.json
+```dotenv
+INTERN_API_KEY=你的模型密钥
+INTERN_MODEL=intern-s2-preview
+MATHS_WEB_PORT=8010
+STAGED_STRATEGY_RETRIEVAL_MODE=hybrid
 ```
 
-调整本地并发：
+| 配置项 | 用途 |
+| --- | --- |
+| `INTERN_API_BASE` | 可选的模型接口完整地址，默认使用 Intern API |
+| `MATHS_WEB_PORT` | Web 和后端共用端口，默认 `8010` |
+| `MATHS_WEB_STATE_DIR` | 启动器记录及日志目录，默认 `local_state/web_launcher` |
+| `MATHS_QUESTION_DIR` | 题目附件目录，默认 `local_state/chat_questions` |
+| `MATHS_STARTUP_TIMEOUT` | 等待后端就绪的超时秒数，默认 `120` |
+| `MATHS_FUNCTION_CALLING` | 工具调用协议，默认 `off`，还支持 `auto`、`native`、`json` |
+| `MATHS_CHAT_REDIS_URL` | 可选的 Redis 连接；未配置时使用进程内存存储 |
+| `MATHS_CHAT_NAMESPACE` | Redis 数据命名空间，默认 `maths:chat:v1` |
+
+完整配置及中文注释见 [.env.example](.env.example)。终端已导出的变量优先于 `.env`。密钥只保留在后端配置中，不提交 Git，也不要写入 `VITE_*` 变量。
+
+## 启动与停止
 
 ```bash
-export LOCAL_MAX_CONCURRENCY=4
+bash start.sh check   # 先检查环境与资源，不启动服务
+bash start.sh         # 检查、构建 React、启动 LangGraph 后端并监听日志
 ```
 
-切换模型名称：
+检查内容包括依赖及版本冲突、模型 Key 是否存在、技能与策略资源、混合检索的本地模型离线推理、目录权限、Redis 配置和端口。检查不会调用远程解题模型，也不验证模型 Key 的有效性；提交题目后才会产生实际模型调用。
+
+看到 `[启动成功]` 后打开 [聊天页面](http://127.0.0.1:8010/chat/)，API 文档位于 [/docs](http://127.0.0.1:8010/docs)。修改端口后使用对应地址。
+
+启动成功后终端会持续显示后端日志。按 **Ctrl+C** 正常关闭本次启动的 LangGraph 后端及 Web 入口。React 构建产物由同一后端提供，不需要单独启动前端服务。
 
 ```bash
-export INTERN_MODEL="intern-s2-preview"
+bash start.sh status        # 查看本启动器管理的服务
+bash start.sh logs          # 查看最近 100 行并持续跟踪日志
+bash start.sh stop          # 正常停止本启动器管理的服务
+bash start.sh --background  # 后台启动，启动器在服务就绪后退出
 ```
 
-## Agent 模式切换
+`logs` 命令中的 Ctrl+C 仅结束日志查看；后台服务用 `stop` 关闭。日志默认保存在 `local_state/web_launcher/runtime.log`，包含启动检查、前端构建和后端输出。执行任务时会显示节点开始/完成、耗时、模型调用、检索命中数及工具事件；模型提供 token 用量时也会打印计数。日志不输出题目、提示词、state 或模型原始响应。图中的 `emergency` 和 `arbitrate` 在平台进度日志中分别归入 `solve` 和 `verify`，原始图节点名称可在 LangSmith 查看。
 
-当前支持两种模式：
+检索时还会打印向量权重的加载开始、完成、耗时、失败类型及进程内缓存复用。启动检查和后端是不同进程，因此首次实际检索仍可能加载权重。最终召回策略逐条输出排名、ID、名称、`score` 及可用的通道分数，并标记是否实际注入解题策略卡；低置信度或超出卡片长度限制的候选可能召回但未注入。不同检索模式的 `score` 含义不同，不应当作概率或跨模式直接比较。
 
-```text
-custom    默认模式，自定义工具调用推理循环
-baseline  旧版 lagent 多候选生成-验证-选择 baseline
-```
+模型日志同时显示节点和调用类型，例如 `profile 调用=classifier`、`verify 调用=targeted_audit`。工具日志显示名称、调用/操作 ID、执行方式、耗时、状态与错误码，以及从 0 开始的尝试序号；重试、回退和缓存重放分别标记。最终工具结果以脱敏 JSON 输出，包括计算值、核验结论或检索匹配结果，不打印检索提示词和渲染后的策略提示卡；单条结果超过 12000 字符时明确标记截断。
 
-通过环境变量切换：
+脚本默认激活 Conda `intern` 环境，也可在终端指定解释器或配置文件：
 
 ```bash
-REASONING_AGENT_MODE=custom python main.py --input_file sample_data/dev.jsonl --output_dir sample_outputs
-REASONING_AGENT_MODE=baseline python main.py --input_file sample_data/dev.jsonl --output_dir sample_outputs
+MATHS_CONDA_ENV=your-env bash start.sh
+MATHS_PYTHON=/path/to/python bash start.sh
+bash start.sh --env-file /path/to/config.env
 ```
 
-也可以在代码中显式传入：
+端口或目录被占用时，启动器会报错，不会关闭其他服务。修改端口、状态目录或配置文件前，先使用原配置执行 `stop`。
 
-```python
-agent = ReasoningAgent(client=client, agent_mode="custom")
-```
+## 聊天记录持久化
 
-## 不同 Agent 的工作方式
-
-### custom
-
-`custom` 是默认实现，入口为 `reasoning_agent/custom/agent.py`。它的主要流程是：
-
-1. `CustomAgent.solve` 创建 `TaskRunner`。
-2. `TaskRunner` 创建 `RunnerContext`，保存题目、metadata、消息、trace、错误和候选答案。
-3. `ToolUseRunner` 进入受控 ReAct 风格循环，最多调用模型 `max_model_calls` 次。
-4. 模型输出会被解析成三类事件：最终答案、工具调用、非法响应。
-5. 如果是工具调用，则通过 `ToolExecutor` 执行白名单工具，并把 observation 写回上下文。
-6. 如果是最终答案，则进入 `AnswerVerifier` 校验，再格式化为 `final_response`。
-7. 出错时会记录 trace，并通过 fallback 逻辑尽量返回一个稳定答案。
-
-默认工具注册表目前为空：
-
-```python
-def build_tool_registry() -> dict[str, ToolSpec]:
-    return {}
-```
-
-如果需要加入 SymPy、计算器或检索工具，应在 `reasoning_agent/custom/tools/registry.py` 中注册，并确保工具参数、返回值和异常都可控、可序列化。
-
-### baseline
-
-`baseline` 位于 `reasoning_agent/baseline/agent.py`，依赖 `lagent`。它的流程是：
-
-1. 调用 policy agent 生成多个候选解答。
-2. 调用 verifier agent 对每个候选进行多轮 A/B 判断。
-3. 按验证投票置信度选择得分最高的候选。
-4. 返回该候选作为 `final_response`，并把生成和验证过程写入 `trace`。
-
-该模式适合理解最小 baseline 和多候选投票思路，但依赖更重，调用次数也更多。
-
-## 引入新的 Agent
-
-新增 agent 推荐按以下方式接入：
-
-1. 新建目录，例如：
-
-```text
-reasoning_agent/my_agent/
-├── __init__.py
-├── agent.py
-└── config.py
-```
-
-2. 在 `agent.py` 中实现类，保持构造函数兼容：
-
-```python
-class MyAgent:
-    def __init__(self, client, config=None, *args, **kwargs):
-        self.client = client
-
-    def solve(self, problem: str, metadata: dict | None) -> dict:
-        return {
-            "final_response": "...",
-            "trace": [],
-        }
-```
-
-3. 修改 `reasoning_agent/factory.py`：
-
-```python
-SUPPORTED_AGENT_MODES = {"custom", "baseline", "my_agent"}
-```
-
-并在 `_build_agent` 中加入分支：
-
-```python
-if mode == "my_agent":
-    from reasoning_agent.my_agent import MyAgent
-    return MyAgent(client, config, *args, **kwargs)
-```
-
-4. 本地运行：
+默认会话和任务保存在内存中，重启后不会保留。需要持久化时，先安装 Redis，再从项目根目录在另一个终端运行：
 
 ```bash
-REASONING_AGENT_MODE=my_agent python main.py --input_file sample_data/dev.jsonl --output_dir sample_outputs
+mkdir -p local_state/chat_redis
+redis-server deploy/redis-chat.conf
 ```
 
-新增 agent 时不要改动 `user_agent.py` 的平台入口，保持平台始终从 `user_agent.py` 导入 `ReasoningAgent`。
+在 `.env` 中设置后启动应用：
 
-## 输出格式要求
-
-每次 `solve` 至少返回：
-
-```python
-{"final_response": "答案"}
+```dotenv
+MATHS_CHAT_REDIS_URL=redis://127.0.0.1:6388/0
+MATHS_CHAT_NAMESPACE=maths:chat:v1
 ```
 
-推荐同时返回：
+提供的 Redis 配置启用 AOF 和 `appendfsync always`，启动器会检查连接与持久化设置，但不负责启停 Redis。保留 Redis 数据、命名空间和题目目录以继续访问历史；原内存会话不会自动迁移。
 
-```python
-{
-    "final_response": "答案",
-    "trace": [
-        {"step": "plan", "content": "..."},
-        {"step": "model_call", "content": "..."},
-        {"step": "finalize", "content": {"answer": "..."}}
-    ],
-}
+## LangSmith 追踪
+
+在 `.env` 配置独立的 LangSmith Key，并重新启动应用：
+
+```dotenv
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=你的LangSmith密钥
+LANGSMITH_PROJECT=math-reasoning
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
 ```
 
-注意事项：
+在 [LangSmith](https://smith.langchain.com/) 对应项目查看图节点与模型调用的父子层级、耗时和脱敏错误，用 `task:<任务 ID>` 标签关联 Web 任务。其他区域或私有部署请调整 `LANGSMITH_ENDPOINT`。
 
-- `final_response` 必须是非空字符串。
-- 返回值必须能被 `json.dump` 序列化。
-- 不要在 `trace` 中记录 API key、访问令牌或个人隐私。
-- 不要依赖样例数据里的 `answer` 字段，正式评测不会提供标准答案。
+开启追踪会上传脱敏后的题目、提示词、节点 state、模型请求与回复，便于查看中间过程；模型返回用量时同步记录 input/output/total token。密钥、认证头、客户端对象、本地路径和原始异常内容不会上传。费用统计取决于 LangSmith 是否支持该模型的定价。启动检查只验证本地配置，不验证云端连接或 Key 有效性。设置 `LANGSMITH_TRACING=false` 可关闭上传。旧的空 trace 无法补回，需要执行新任务。官方说明：[LangGraph 与 LangSmith](https://docs.langchain.com/langsmith/trace-with-langgraph)。
 
-## 提交与安全注意事项
+## 开发与测试
 
-- 仓库根目录必须保留 `user_agent.py`。
-- 所有新增依赖写入 `requirements.txt`。
-- 不要硬编码 API key、绝对路径、隐藏测试集或标准答案。
-- 不要假设题目按固定顺序执行，也不要依赖跨题共享状态。
-- 本地调试通过后，提交具体 commit SHA 供评测系统拉取，避免只提交分支名。
+前端开发时，保持后端运行，在另一个终端启动 Vite 热更新：
+
+```bash
+cd client
+MATHS_BACKEND_URL=http://127.0.0.1:8010 npm run dev -- --port 5174
+```
+
+访问 `http://127.0.0.1:5174/chat/`。只调试界面且无需真实模型时，可用 `python -m agent_platform --port 8010` 启动 Fake 后端；此入口需先用 `npm --prefix client run build` 构建页面，Fake 模式仅返回演示结果。
+
+```bash
+python -m pip install -r requirements-platform-dev.txt
+python -m pytest -q
+npm --prefix client test
+npm --prefix client run build
+```
+
+完整 CI 使用 `python scripts/check_platform_ci.py`，PostgreSQL 测试需要专用、可丢弃的 `MATHS_TEST_DATABASE_URL`。确定性回归测试无需真实模型请求。
+
+## 使用边界
+
+- 当前面向本地单用户，绑定 `127.0.0.1`；公开部署需要另行配置身份认证与访问隔离。
+- 支持 PDF / Markdown 题目文件，扫描 PDF 的 OCR 尚不支持。
+- 取消或中断后可显式恢复任务；代码或配置更新可能导致旧检查点无法恢复。
+- `.env`、日志、聊天记录、题目附件、模型权重和生成结果不应提交 Git。
+
+更多配置见 [后端说明](agent_platform/README.md)，前端行为见 [前端说明](client/README.md)，维护工具见 [脚本说明](scripts/README.md)。

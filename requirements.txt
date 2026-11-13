@@ -1,2 +1,4 @@
-requests>=2.31.0
-lagent @ git+https://github.com/InternLM/lagent.git@0ab2e2f550477884743cd63fbca7bc4aa7b00290
+# Default Web backend, including local chat and distributed storage adapters.
+-r requirements-platform-m6.txt
+# Optional local embedding/RAG: requirements-platform-m5.txt
+# Development and CI: requirements-platform-dev.txt

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Math Core Reasoning"
+  short_description: "Plan and execute disciplined olympiad reasoning"
+  default_prompt: "Use $math-core-reasoning to build and execute a rigorous solution plan."

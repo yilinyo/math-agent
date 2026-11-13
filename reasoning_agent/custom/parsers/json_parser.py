@@ -15,16 +15,26 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         pass
 
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
+    # 模型有时会连续输出多个 JSON 对象，例如先 solve_step 再 final_answer。
+    # 这种情况下按“最后一个有效对象”推进，避免被前面的多余对象卡死。
+    return _extract_last_json_object(cleaned)
 
-    try:
-        data = json.loads(cleaned[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+
+def _extract_last_json_object(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    latest: dict[str, Any] | None = None
+
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            data, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            latest = data
+
+    return latest
 
 
 def make_json_safe(value: Any) -> Any:

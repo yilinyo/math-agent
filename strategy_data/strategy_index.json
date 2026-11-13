@@ -1,0 +1,22 @@
+{
+  "dataset": "ReasonFlux-V2-Template",
+  "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+  "embedding_dim": 1024,
+  "normalized": true,
+  "dtype": "float32",
+  "fields_used": [
+    "name",
+    "tags",
+    "description",
+    "applicability",
+    "steps"
+  ],
+  "num_strategies": 5601,
+  "migration_source": {
+    "ref": "main",
+    "commit": "b997586a99468456b4bc19fa6d242ed4bafddc8d",
+    "source_rows": 5721,
+    "selected_rows": 5601,
+    "metadata_match": "exact prefix including all fields and IDs"
+  }
+}

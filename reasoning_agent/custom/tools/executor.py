@@ -22,6 +22,9 @@ class ToolExecutor:
                 "error": {"type": type(exc).__name__, "message": str(exc)},
             }
 
+    def chat_tools(self) -> list[dict[str, Any]]:
+        return [spec.to_chat_tool() for spec in self.tools.values()]
+
     def _validate(self, name: str, arguments: dict[str, Any]) -> ToolSpec:
         if name not in self.tools:
             raise InvalidToolRequest(f"unknown tool: {name}")

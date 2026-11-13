@@ -1,0 +1,129 @@
+[
+  {
+    "source": "formula_guidance_reference",
+    "name": "Finite-Difference Formula Selection and Consistency Check",
+    "tags": ["numerical differentiation", "finite difference", "forward difference", "central difference", "truncation error"],
+    "description": "Choose a numerical-derivative formula only after matching the requested stencil to its sampled points. Forward and backward differences use one neighboring point and have first-order truncation error; the symmetric central difference uses points on both sides and has second-order truncation error. If a statement's method label conflicts with its displayed formula or data, calculate the formula actually specified and explicitly flag the inconsistency for verification.",
+    "applicability": [
+      "A differentiable function is sampled at a point and one or two neighboring points",
+      "The task requests a finite-difference approximation to a first derivative",
+      "The wording, formula, or expected precision may be internally inconsistent"
+    ],
+    "steps": [
+      {"step": "Identify the stencil", "detail": "Use [f(x+h)-f(x)]/h for a forward difference, [f(x)-f(x-h)]/h for a backward difference, and [f(x+h)-f(x-h)]/(2h) for a central difference."},
+      {"step": "Compute from the stated samples", "detail": "Substitute the provided point and step size without silently replacing the requested stencil by a different one."},
+      {"step": "Check the error order", "detail": "Forward/backward differences are O(h); the central difference is O(h²) under the usual smoothness assumptions."},
+      {"step": "Resolve conflicts transparently", "detail": "If the prose and the formula disagree, state the discrepancy and keep the derivation tied to the actual formula used."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  },
+  {
+    "source": "formula_guidance_reference",
+    "name": "Symmetric Binomial Capacity via a Two-Tail Quantile",
+    "tags": ["probability", "binomial distribution", "normal approximation", "capacity planning", "two tails", "quantile inversion"],
+    "description": "For two symmetric capacity choices, model the count choosing one side as X~Binomial(N,1/2). When equal capacities are at least the mean, the event that either side overflows is the union of two disjoint symmetric tails. Reduce the total risk tolerance to one tail, invert the normal quantile for a candidate integer capacity, then verify the adjacent integers with an exact binomial tail when the boundary matters.",
+    "applicability": [
+      "N independent agents choose between two symmetric alternatives with probability 1/2",
+      "Both alternatives have equal integer capacity",
+      "The objective is to keep the probability of at least one overflow below a specified tolerance"
+    ],
+    "steps": [
+      {"step": "Model one side", "detail": "Let X~Binomial(N,1/2), with mean μ=N/2 and standard deviation σ=sqrt(N)/2."},
+      {"step": "Split the overflow event", "detail": "For capacity x≥μ, use P(E)=2P(X>x), so a total tolerance ε becomes a one-tail tolerance ε/2."},
+      {"step": "Invert the quantile", "detail": "Use x≥μ+σΦ⁻¹(1-ε/2), subject to the chosen normal-approximation convention and upward integer rounding."},
+      {"step": "Verify the boundary", "detail": "Compare the exact binomial tail probabilities at the candidate capacity and the preceding integer."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  },
+  {
+    "source": "formula_guidance_reference",
+    "name": "Recursive Round-Robin Scheduling with Stay-Cost Bounds",
+    "tags": ["operations research", "round robin", "tournament scheduling", "recursive divide and conquer", "stay cost"],
+    "description": "To minimize total player stay-days in a one-match-per-day round robin, concentrate every player's first-to-last-match interval. For an even player count, recursively schedule matches inside two equal groups and then arrange cross-group matches in a concentrated block. Derive the recurrence and evaluate it only after substituting the current problem's player count.",
+    "applicability": [
+      "Every pair of players meets exactly once",
+      "Only one match can be scheduled per day",
+      "A player's cost is the inclusive interval from first to last match",
+      "The task asks for a minimum total stay or lodging cost"
+    ],
+    "steps": [
+      {"step": "Use a recursive split", "detail": "Partition an even-sized field into two equal groups, solve the two within-group schedules recursively, then place cross-group matches to keep attendance windows concentrated."},
+      {"step": "Set up the recurrence", "detail": "Express T(2m) as 2T(m) plus the cross-group contribution; validate it on a small instance before extrapolating."},
+      {"step": "Evaluate only after derivation", "detail": "Substitute the player count of the current problem into the proven closed form or recurrence, rather than carrying over a stored numerical total."},
+      {"step": "Discard irrelevant narrative", "detail": "Facilities, spectators, or other details do not affect the schedule unless they change match or attendance constraints."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  },
+  {
+    "source": "formula_guidance_reference",
+    "name": "V-Shaped Reserve Invariant for Split-Choose Box Games",
+    "tags": ["combinatorial game", "split choose game", "box allocation", "pebbles", "invariant", "lower bound"],
+    "description": "In a line of boxes repeatedly split into a left and right group, with one group incremented and the other decremented, use a V-shaped reserve profile centered at a median position. Prove an upper bound by maintaining domination of a translated reserve profile after every cut, and prove the matching lower bound by counting boxes below each reserve level. Evaluate the resulting expression only for the current number of boxes.",
+    "applicability": [
+      "Boxes are ordered in a line and an adversary chooses a split point each round",
+      "The defender increments one resulting group and decrements the other",
+      "The defender seeks the smallest initial total that keeps every box positive indefinitely"
+    ],
+    "steps": [
+      {"step": "Build the reserve profile", "detail": "For a center c, use a_i=1+|i-c| as the candidate V-shaped reserve."},
+      {"step": "Prove the defensive invariant", "detail": "After a cut, choose the incremented side so the current allocation continues to dominate a suitable translated reserve profile."},
+      {"step": "Prove the lower bound", "detail": "Use layer counting or the equivalent pairwise reserve condition to show that any smaller total leaves a vulnerable box configuration."},
+      {"step": "Evaluate symbolically", "detail": "For an even number N=2m of boxes, derive the formula before substituting the current N."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  },
+  {
+    "source": "formula_guidance_reference",
+    "name": "Complete-Graph Random-Walk Cover-Time Decomposition",
+    "tags": ["stochastic process", "random walk", "complete graph", "cover time", "geometric distribution", "harmonic sum"],
+    "description": "For a simple random walk without self-loops on the complete graph K_N, decompose the cover time into waiting stages for discovering successive new vertices. Because the walker has N-1 possible neighbors rather than N possible coupon types, derive the stage probabilities from the current visited-set size before summing expectations.",
+    "applicability": [
+      "The graph is K_N and the walk selects uniformly among N-1 neighbors",
+      "The initial vertex already counts as visited",
+      "The objective is the expected first time at which every vertex has been visited"
+    ],
+    "steps": [
+      {"step": "Separate discovery stages", "detail": "When k vertices have been visited, the probability of a new vertex on the next step is (N-k)/(N-1)."},
+      {"step": "Use geometric waiting times", "detail": "The waiting time τ_k has expectation (N-1)/(N-k)."},
+      {"step": "Sum and reindex", "detail": "Use linearity on T=Στ_k and set j=N-k to obtain the harmonic-sum expression for the current N."},
+      {"step": "Check conventions", "detail": "Distinguish transition count from labeled visit time, and do not import the ordinary coupon-collector denominator N."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  },
+  {
+    "source": "formula_guidance_reference",
+    "name": "Fourier Transform Linearity, Translation, and Consistency Checks",
+    "tags": ["Fourier transform", "linearity", "translation", "exponential kernel", "Lorentzian kernel", "normalization"],
+    "description": "For Fourier-transform problems built from shifted exponential or rational kernels, first fix the transform convention, decompose by linearity, and apply the translation phase factor by a change of variables. Derive every term from the printed function; if a proposed answer or an external reference uses a different function, report the mismatch instead of silently substituting a preferred expression.",
+    "applicability": [
+      "The function is a sum of shifted, exponentially decaying, or rational components",
+      "The task requests a Fourier transform under a stated convention",
+      "A shift or normalization choice can change the answer"
+    ],
+    "steps": [
+      {"step": "Fix the convention", "detail": "Write the sign and normalization in the transform definition before using a table entry."},
+      {"step": "Apply linearity", "detail": "Transform each summand independently and add the results."},
+      {"step": "Apply translation correctly", "detail": "For the convention F[f](ξ)=∫f(x)e^{-iξx}dx, F[f(x-a)](ξ)=e^{-iξa}F[f](ξ)."},
+      {"step": "Check every kernel", "detail": "For example, derive the transform of e^{-|x|} by splitting the integral at zero; do not discard any printed summand."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  },
+  {
+    "source": "formula_guidance_reference",
+    "name": "Splitting Fields of Quartic Binomials via Roots of Unity",
+    "tags": ["abstract algebra", "splitting field", "Galois extension", "quartic binomial", "roots of unity", "extension degree"],
+    "description": "For a quartic binomial x^4+c over Q, first establish the relevant irreducibility facts, write all roots using a fourth root of c and appropriate roots of unity, and form the splitting field as a compositum. Determine the degree from a tower and the actual intersection of subfields; do not assume that degrees always multiply. In characteristic zero, a splitting field is separable and normal, hence Galois.",
+    "applicability": [
+      "The problem asks for the splitting field or extension degree of x^4+c over Q",
+      "Complex roots require a root-of-unity extension in addition to a radical extension",
+      "The question asks whether the resulting splitting-field extension is Galois"
+    ],
+    "steps": [
+      {"step": "List all roots", "detail": "Write a fourth root α of -c or c as appropriate and multiply it by the relevant fourth roots of unity."},
+      {"step": "Construct the compositum", "detail": "Express the splitting field as Q(α, ζ), choosing roots of unity sufficient to generate every root."},
+      {"step": "Compute the degree carefully", "detail": "Use the tower law together with an explicit intersection or linear-disjointness argument; do not multiply degrees without justification."},
+      {"step": "Classify the extension", "detail": "Over characteristic zero, use separability and normality of a splitting field to establish the Galois property."}
+    ],
+    "example": {"problem": "", "solution": ""}
+  }
+]

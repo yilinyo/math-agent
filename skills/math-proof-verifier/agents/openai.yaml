@@ -1,0 +1,4 @@
+interface:
+  display_name: "Math Proof Verifier"
+  short_description: "Audit olympiad proofs for gaps and invalid steps"
+  default_prompt: "Use $math-proof-verifier to audit this proposed solution and repair its gaps."

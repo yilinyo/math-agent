@@ -28,7 +28,13 @@ class CustomAgent:
             config=self.config,
         )
         result = runner.run(problem=problem, metadata=metadata)
-        return {
-            "final_response": normalize_final_response(result.final_response),
+        output = {
+            "final_response": normalize_final_response(
+                result.final_response,
+                problem=problem,
+            ),
             "trace": make_json_safe(result.trace),
         }
+        if self.config.emit_debug_trace:
+            output["debug_trace"] = make_json_safe(result.debug_trace)
+        return output
