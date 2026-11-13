@@ -26,3 +26,12 @@ reasoning_agent/**/__pycache__/**
 skill2*/**/log.md
 !deployment_bootstrap.py
 !llm_client.py
+!strategy_data/
+!strategy_data/strategy_meta.json
+!strategy_data/strategy_lexical_index.json
+!strategy_data/strategy_lexical_manifest.json
+!strategy_data/strategy_embeddings.npy
+!strategy_data/strategy_index.json
+!strategy_data/translated_skill_module_templates.json
+!strategy_data/translated_skill_module_templates.jsonl
+!strategy_data/translated_knowledge_templates.json

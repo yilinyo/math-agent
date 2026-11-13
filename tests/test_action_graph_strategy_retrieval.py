@@ -79,8 +79,9 @@ class ActionGraphStrategyRetrievalTest(unittest.TestCase):
         self.assertTrue(ActionGraphConfig().action_strategy_retrieval_enabled)
         self.assertEqual(ActionGraphConfig().action_strategy_retrieval_top_k, 2)
 
-    def test_embedding_defaults_to_cpu(self) -> None:
-        self.assertEqual(preferred_device(), "cpu")
+    def test_embedding_defaults_to_cpu_without_torch(self) -> None:
+        with patch.dict("sys.modules", {"torch": None}):
+            self.assertEqual(preferred_device(), "cpu")
 
     def test_structured_query_requires_and_preserves_transition_directionality(self) -> None:
         prompt = build_structure_messages("Count paths with x_i-x_{i+1} in {-1, 19}.")[0]["content"]

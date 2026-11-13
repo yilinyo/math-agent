@@ -1,0 +1,69 @@
+name: maths-web
+
+services:
+  web:
+    image: maths-agent-web:${MATHS_IMAGE_TAG:-local}
+    build:
+      context: .
+      target: web
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:24.11.1-bookworm-slim}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11.13-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://mirror.sjtu.edu.cn/pytorch-wheels/cpu}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${MATHS_WEB_BIND:-127.0.0.1}:${MATHS_WEB_PORT:-8010}:8000"
+    environment:
+      INTERN_API_KEY: ${INTERN_API_KEY:?Set INTERN_API_KEY}
+      INTERN_API_BASE: ${INTERN_API_BASE:-https://chat.intern-ai.org.cn/api/v1/chat/completions}
+      INTERN_MODEL: ${INTERN_MODEL:-intern-s2-preview}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-math-reasoning}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      STAGED_STRATEGY_RETRIEVAL_ENABLED: ${STAGED_STRATEGY_RETRIEVAL_ENABLED:-true}
+      STAGED_STRATEGY_RETRIEVAL_MODE: ${STAGED_STRATEGY_RETRIEVAL_MODE:-hybrid}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - type: bind
+        source: ${MATHS_MODEL_DIR:?Set the absolute path of the complete embedding model directory}
+        target: /app/strategyrag/Qwen3-Embedding-0.6B
+        read_only: true
+        bind:
+          create_host_path: false
+      - web-data:/var/lib/maths
+    command:
+      - sh
+      - -ec
+      - |
+        test -s /app/strategyrag/Qwen3-Embedding-0.6B/model.safetensors || {
+          echo '缺少完整模型权重，请检查 MATHS_MODEL_DIR 挂载目录；只读挂载不支持现场合并分片。' >&2
+          exit 1
+        }
+        python -c 'from safetensors import safe_open; weights = safe_open("/app/strategyrag/Qwen3-Embedding-0.6B/model.safetensors", framework="pt", device="cpu"); assert list(weights.keys()), "模型权重为空"'
+        python -c 'import os, torch; required = os.environ.get("MATHS_REQUIRE_CUDA") == "true"; available = torch.cuda.is_available(); assert not required or available, "已启用 GPU 模式，但 CUDA 不可用，请检查驱动、NVIDIA Container Toolkit 和 PyTorch 版本"; print("[推理设备]", "cuda: " + torch.cuda.get_device_name(0) if available else "cpu", flush=True)'
+        exec python -m agent_platform --host 0.0.0.0 --port 8000 --runtime langgraph \
+          --client-provider deployment_bootstrap:provided_client --function-calling off \
+          --question-dir /var/lib/maths/questions
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, urllib.request;
+          h=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3));
+          assert h.get('status') == 'ready' and h.get('runtime_mode') == 'langgraph_staged';
+          r=urllib.request.urlopen('http://127.0.0.1:8000/chat/', timeout=3);
+          assert r.status == 200 and r.read()
+      interval: 5s
+      timeout: 10s
+      start_period: 20s
+      retries: 20
+
+volumes:
+  web-data:

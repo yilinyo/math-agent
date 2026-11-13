@@ -1,0 +1,15 @@
+# NVIDIA GPU override; combine with compose.web.yaml.
+services:
+  web:
+    build:
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://mirror.sjtu.edu.cn/pytorch-wheels/cu128}
+    environment:
+      MATHS_REQUIRE_CUDA: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

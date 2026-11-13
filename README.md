@@ -152,6 +152,64 @@ bash start.sh --env-file /path/to/config.env
 
 端口或目录被占用时，启动器会报错，不会关闭其他服务。修改端口、状态目录或配置文件前，先使用原配置执行 `stop`。
 
+## Docker 与 dev 流水线
+
+`compose.web.yaml` 提供单容器 Web + LangGraph，镜像包含前端、Python 依赖和策略索引，模型通过只读目录挂载，不复制到镜像。
+宿主机只需安装 Docker 和 Compose v2，无需 uv、Conda 或 Node.js。前端在镜像构建阶段编译。
+容器内直接使用官方 Python 3.11 环境安装依赖，不创建 Conda 或额外虚拟环境。
+构建默认使用清华 PyPI、npmmirror npm 和上海交大 PyTorch CPU 下载源，分别通过 `PIP_INDEX_URL`、`NPM_REGISTRY`、`TORCH_INDEX_URL` 覆盖。
+基础镜像默认来自 Docker Hub，可通过 `NODE_IMAGE`、`PYTHON_IMAGE` 指定可访问仓库中的兼容镜像。
+这些构建参数可在本地 `.env` 或 GitHub `dev` Environment Variables 中配置；运行时 Key 不作为构建参数。
+
+先准备完整模型目录，包含 `model.safetensors`、配置、tokenizer 以及 `1_Pooling/` 等原有文件。
+只读挂载不能现场合并分片，不能使用只有 Git LFS 指针的文件；容器用户 UID `10001` 需要有目录读取权限。
+
+```bash
+export MATHS_MODEL_DIR=/opt/models/Qwen3-Embedding-0.6B
+# 本地使用已有 .env 中的 INTERN_API_KEY 等配置；不要将 Key 写进 Compose。
+docker compose -f compose.web.yaml up -d --build --wait
+docker compose -f compose.web.yaml logs -f web
+docker compose -f compose.web.yaml down
+```
+
+默认页面为 `http://127.0.0.1:8010/chat/`。`MATHS_WEB_PORT` 可修改宿主机端口；需要对外监听时显式设置 `MATHS_WEB_BIND`。
+题目文件放在 Docker 命名卷 `web-data`；`down` 保留该卷，但当前会话/任务仍在进程内存中，重启不保留。
+容器日志通过 Docker 查看，完整模型挂载到 `/app/strategyrag/Qwen3-Embedding-0.6B`；不会自动下载权重。
+工具协议固定为 `off`，与 `start.sh` 默认一致。
+
+NVIDIA GPU 服务器需预装显卡驱动和 NVIDIA Container Toolkit。使用 GPU 配置构建并启动：
+
+```bash
+docker compose -f compose.web.yaml -f compose.web.gpu.yaml up -d --build --wait
+```
+
+GPU 配置默认从上海交大 `cu128` 源安装 CUDA 版 PyTorch，并将 GPU 暴露给容器；可用 `TORCH_INDEX_URL` 选择与驱动和显卡兼容的版本。
+宿主机不需要安装 Conda 或 Python CUDA 包。容器启动时检查 CUDA 可用性并打印设备名称，不可用则启动失败。
+检索模型自动选择 CUDA，其次 MPS，最后 CPU；GPU 加速的是本地嵌入检索，解题模型仍通过远程 API 调用。
+
+`.github/workflows/platform.yml` 仅在推送 `dev` 或选择 `dev` 手动运行时执行，在 self-hosted runner 构建并启动此容器。
+在 GitHub **Settings → Environments → dev** 配置下列 Secrets 和 Variables；也支持同名仓库级配置：
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Secret | `INTERN_API_KEY` | 必填，解题模型 Key |
+| Secret | `LANGSMITH_API_KEY` | 开启追踪时填写 |
+| Variable | `MATHS_MODEL_DIR` | 必填，Docker 宿主机上的完整模型目录绝对路径，例如 `/opt/models/Qwen3-Embedding-0.6B` |
+| Variable | `MATHS_USE_GPU` | NVIDIA GPU 服务器设置 `true`，自动启用 GPU 配置及 cu128 PyTorch 下载源；默认关闭 |
+| Variable | `TORCH_INDEX_URL` | 可选，覆盖 CPU/CUDA PyTorch 下载源，需与显卡驱动兼容 |
+| 仓库级 Variable | `MATHS_RUNNER_LABELS` | 可选，标签 JSON 数组，例如 `["self-hosted","Linux","math-agent"]`；默认 `["self-hosted"]` |
+| Variable | `INTERN_MODEL`、`INTERN_API_BASE` | 模型名称和可选接口地址 |
+| Variable | `MATHS_WEB_PORT` | 检查端口，默认 `18010`，避免与常驻服务冲突 |
+| Variable | `MATHS_STARTUP_TIMEOUT` | 等待就绪时间，默认 `180` 秒 |
+| Variable | `LANGSMITH_TRACING`、`LANGSMITH_PROJECT`、`LANGSMITH_ENDPOINT` | 可选追踪配置 |
+| Variable | `STAGED_STRATEGY_RETRIEVAL_ENABLED`、`STAGED_STRATEGY_RETRIEVAL_MODE` | 默认启用 hybrid 检索 |
+
+CI 不读取 runner 本地 `.env`，Key 仅通过容器运行环境传入，不参与镜像构建。
+流水线不再执行原先独立的配置检查、前端测试、后端静态检查或完整测试；构建失败或容器健康检查失败时流水线失败。
+它等待 `/health/ready` 和 `/chat/` 检查通过，输出容器日志，再关闭本次检查容器；项目名固定为 `maths-dev-check`，与常驻服务隔离。
+流水线不会保持 Web 常驻，也不会提交题目、验证 API Key 有效性或执行向量推理验证。需要常驻时在宿主机执行上面的 `up -d` 命令。
+本地仍可运行 `python scripts/check_platform_ci.py` 完成完整工程检查。
+
 ## 聊天记录持久化
 
 默认会话和任务保存在内存中，重启后不会保留。需要持久化时，先安装 Redis，再从项目根目录在另一个终端运行：
