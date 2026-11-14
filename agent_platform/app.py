@@ -60,7 +60,7 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
                finalize_reserve_seconds: float = 25, heartbeat_seconds: float = 15,
                poll_seconds: float = 0.1, rate_limits: bool = True, documents=None,
                task_service=None, limiter=None, event_transport=None, readiness=None,
-               operational_health=None, question_dir=None, library=None, solve_agents=None) -> FastAPI:
+               operational_health=None, question_dir=None, library=None, solve_agents=None, resources=None) -> FastAPI:
     if not 0 < heartbeat_seconds <= 15 or poll_seconds <= 0:
         raise ValueError("invalid_stream_configuration")
     repository = store if store is not None else InMemoryTaskStore()
@@ -68,6 +68,8 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
     service = task_service or TaskService(repository, runtime, max_concurrency, budget_seconds,
                                          finalize_reserve_seconds)
     service.solve_agents = solve_agents
+    if resources is not None and hasattr(runtime, 'base_config_hash'):
+        runtime.resources = resources
     limiter = limiter or LocalRateLimiter()
     streams = StreamBudget()
     questions = None
@@ -101,6 +103,7 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
     app.state.questions = questions
     app.state.library = library
     app.state.solve_agents = solve_agents
+    app.state.resources = resources
     if documents or questions:
         from agent_platform.rag.upload import UploadLimit
         app.add_middleware(UploadLimit)
@@ -121,6 +124,8 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
 
     from agent_platform.custom_library import library_router
     app.include_router(library_router(library, limit))
+    from agent_platform.knowledge_resources import resources_router
+    app.include_router(resources_router(resources, limit))
     from agent_platform.solve_agents import solve_agents_router, public_agent, SNAPSHOT_KEY, REQUEST_KEY
     app.include_router(solve_agents_router(solve_agents, limit))
 
@@ -187,6 +192,7 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
             "question_attachments": questions is not None,
             "question_submission": "explicit_send" if questions else None,
             "custom_library": library is not None,
+            "knowledge_resources": resources is not None,
             "solve_agents": solve_agents is not None,
         }, status
 

@@ -35,17 +35,15 @@ def main():
             page.on("request", request)
 
             def open_panel():
-                button = page.get_by_role("button", name="模型与 Agents", exact=True)
-                if not button.is_visible():
-                    page.get_by_role("button", name="会话列表", exact=True).click()
+                page.get_by_role("button", name="设置", exact=True).click()
                 page.get_by_role("button", name="模型与 Agents", exact=True).click()
-                panel = page.get_by_role("dialog", name="模型与 Agents", exact=True)
+                panel = page.get_by_role("region", name="模型与 Agents", exact=True)
                 expect(panel).to_be_visible()
                 expect(panel.get_by_role("button", name="保存", exact=True)).to_be_enabled()
                 return panel
 
             page.goto(args.url + "/chat/")
-            expect(page.get_by_label("Solve Agent", exact=True)).to_be_enabled()
+            expect(page.get_by_role("button", name="设置", exact=True)).to_be_visible()
             panel = open_panel()
             title, model = "QA solver " + name, "synthetic-" + name
             panel.get_by_label("名称", exact=True).fill(title)
@@ -61,10 +59,11 @@ def main():
             expect(panel.get_by_role("status")).to_have_text("已设为默认")
             page.screenshot(path=str(args.output_dir / f"{name}-panel.png"))
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-            panel.get_by_role("button", name="关闭模型配置").click()
-            selector = page.get_by_label("Solve Agent", exact=True)
+            page.get_by_role("button", name="对话偏好", exact=True).click()
+            selector = page.get_by_label("解题模型", exact=True)
             expect(selector.locator("option:checked")).to_contain_text(title)
             chosen = selector.input_value()
+            page.get_by_role("button", name="返回对话", exact=True).click()
             page.get_by_label("数学问题", exact=True).fill("Synthetic solver selection fixture.")
             page.get_by_role("button", name="发送问题", exact=True).click()
             expect(page.locator(".task-agent").last).to_contain_text(model)
@@ -88,9 +87,10 @@ def main():
             expect(row).to_contain_text("v4")
             panel.get_by_role("button", name="删除 Agent", exact=True).click()
             expect(row).to_have_count(0)
-            panel.get_by_role("button", name="关闭模型配置").click()
-            expect(page.locator(".task-agent").last).to_contain_text(model + " · v1")
+            page.get_by_role("button", name="对话偏好", exact=True).click()
             expect(selector).to_have_value("builtin")
+            page.get_by_role("button", name="返回对话", exact=True).click()
+            expect(page.locator(".task-agent").last).to_contain_text(model + " · v1")
             assert not errors, errors
             print(json.dumps({"viewport": name, "crud_default_test_selection_history": "passed", "browser_errors": errors}))
             context.close()

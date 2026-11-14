@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, BookOpen, Check, ChevronRight, Circle, Copy, FileJson, LoaderCircle, Menu,
-  MessageSquare, PanelRightOpen, Plus, RotateCcw, Sigma, SlidersHorizontal, Square, X, Cpu,
+  ArrowUp, Check, ChevronRight, Circle, Copy, FileJson, LoaderCircle, Menu,
+  MessageSquare, PanelRightOpen, Plus, RotateCcw, Sigma, Square, X, Settings,
 } from 'lucide-react';
 import {
   ApiError, cancelTask, createSession, errorMessage, getHealth, getTask, getSessions, getSessionTasks, newIdempotencyKey, resumeTask,
@@ -12,8 +12,7 @@ import { mergeTasks, readHistory, readSelected, saveHistory, saveSelected, type 
 import MathMarkdown from './MathMarkdown';
 import QuestionBatches, { type QuestionState } from './QuestionBatches';
 import TaskOutput from './TaskOutput';
-import LibraryPanel from './LibraryPanel';
-import AgentsPanel from './AgentsPanel';
+import SettingsPage, { type SettingsSection } from './SettingsPage';
 import { answerFromEvent, executionSummary, type LiveTaskView } from './taskStream';
 import { timelineFromEvent } from './timelineState';
 import { formatDuration, taskTimings } from './timing';
@@ -21,6 +20,11 @@ import { formatDuration, taskTimings } from './timing';
 interface RecordView extends LiveTaskView { started: string[]; completed: string[]; error?: string }
 const blank = (): RecordView => ({ events: [], started: [], completed: [] });
 const keyFor = (session: string, id: string) => `${session}/${id}`;
+const settingsFromHash = (): SettingsSection | null => {
+  if (typeof window === 'undefined') return null;
+  const section = window.location.hash.match(/^#\/settings(?:\/(general|agents|library))?$/);
+  return section ? (section[1] || 'general') as SettingsSection : null;
+};
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionRef[]>([]);
@@ -46,8 +50,26 @@ export default function App() {
   const [connection, setConnection] = useState('未连接');
   const [watchVersion, setWatchVersion] = useState(0);
   const [drawer, setDrawer] = useState<'sessions' | 'progress' | null>(null);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState(settingsFromHash);
+  const navigationGuard = useRef<() => boolean>(() => true);
+  const registerGuard = useCallback((guard: () => boolean) => { navigationGuard.current = guard; }, []);
+  const navigateSettings = useCallback((section?: SettingsSection) => {
+    window.location.hash = section ? `/settings/${section}` : '/chat';
+  }, []);
+  useEffect(() => {
+    let acceptedHash = window.location.hash;
+    const change = () => {
+      if (!navigationGuard.current()) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search + acceptedHash);
+        return;
+      }
+      acceptedHash = window.location.hash;
+      setDrawer(null);
+      setSettingsSection(settingsFromHash());
+    };
+    window.addEventListener('hashchange', change);
+    return () => window.removeEventListener('hashchange', change);
+  }, []);
   const [agents, setAgents] = useState<AgentCatalog>();
   const [agentId, setAgentId] = useState('');
   const [agentsError, setAgentsError] = useState('');
@@ -203,12 +225,13 @@ export default function App() {
     return () => { document.removeEventListener('keydown', trap); previous?.focus(); };
   }, [drawer]);
   useEffect(() => {
+    if (settingsSection) return;
     const element = composer.current;
     if (element) { element.style.height = '0px'; element.style.height = `${Math.min(element.scrollHeight, 160)}px`; }
-  }, [draft, !!attachment]);
+  }, [draft, !!attachment, settingsSection]);
   useEffect(() => {
     if (followScroll.current && scrollArea.current) scrollArea.current.scrollTop = scrollArea.current.scrollHeight;
-  }, [records, selected]);
+  }, [records, selected, settingsSection]);
 
   useEffect(() => {
     if (!selected || !latestRef) { setConnection('未连接'); return; }
@@ -349,8 +372,6 @@ export default function App() {
   const sessionSidebar = <>
     <div className="brand"><span className="brand-mark"><Sigma size={22} /></span><span>MathS-Agent<small>数学推理工作台</small></span></div>
     <button className="new-session" onClick={() => selectSession(null)} disabled={sending || historyBusy || fileUploading}><Plus size={18} />新建会话</button>
-    {health?.custom_library && <button className="sidebar-tool" onClick={() => { setDrawer(null); setLibraryOpen(true); }}><BookOpen size={16} />策略与 Skills</button>}
-    {health?.solve_agents && <button className="sidebar-tool" onClick={() => { setDrawer(null); setAgentsOpen(true); }}><Cpu size={16} />模型与 Agents</button>}
     <div className="nav-heading">会话{supportsHistory && <button className="icon-button" title="刷新会话" aria-label="刷新会话"
       disabled={historyBusy || sending} onClick={() => setHistoryVersion(value => value + 1)}><RotateCcw size={14} /></button>}</div>
     {historyBusy && <p className="muted" role="status">载入会话中</p>}
@@ -404,7 +425,8 @@ export default function App() {
     </> : <div className="panel-empty"><Circle size={18} /><span>{loading ? '载入任务中' : '暂无任务'}</span></div>}
   </>;
 
-  return <div className="app-shell">
+  return <>
+  <div className="app-shell" style={settingsSection ? { display: 'none' } : undefined}>
     <aside className="sidebar">{sessionSidebar}</aside>
     <div className="workspace">
       <header className="topbar">
@@ -415,7 +437,7 @@ export default function App() {
           <span />{!health ? '连接服务中' : !ready ? '服务未就绪' : isDemo ? '演示运行时' : isReal ? '真实运行时' : health.runtime_mode}
         </div>
         <button className="icon-button mobile-progress" title="执行进度" aria-label="执行进度" onClick={() => setDrawer('progress')}><PanelRightOpen size={20} /></button>
-        {health?.custom_library && <button className="icon-button library-open-mobile" title="自定义知识" aria-label="自定义知识" onClick={() => { setDrawer(null); setLibraryOpen(true); }}><BookOpen size={19} /></button>}
+        <button className="icon-button settings-entry" title="设置" aria-label="设置" onClick={() => navigateSettings('general')}><Settings size={19} /></button>
       </header>
       <div className="workspace-body">
         <main className="conversation">
@@ -433,7 +455,7 @@ export default function App() {
               {currentSession?.nextCursor && <button className="secondary" disabled={taskHistoryBusy} onClick={() => void olderTasks()}><RotateCcw size={14} />更早的问题</button>}
             </div>}
             {!currentSession?.tasks.length ? !questionState.count && <div className="empty-chat"><span className="empty-mark"><Sigma size={34} strokeWidth={1.6} /></span>
-              <h1>MathS-Agent</h1><span className="empty-category">数学解题</span></div> : <div className="messages">
+              <h1>MathS-Agent</h1><span className="empty-category">今天想解哪道题？</span></div> : <div className="messages">
               {currentSession.tasks.map(reference => {
                 const record = records[keyFor(currentSession.id, reference.id)], task = record?.task;
                 return <section className="exchange" key={reference.id} data-testid="exchange">
@@ -455,24 +477,7 @@ export default function App() {
               {latestRecord?.error && <button className="icon-button" title="重连任务" aria-label="重连任务" onClick={() => setWatchVersion(value => value + 1)}><RotateCcw size={16} /></button>}
               {error && <button className="icon-button" title="关闭提示" aria-label="关闭提示" onClick={() => setError('')}><X size={16} /></button>}
             </div>}
-            {agentsError && <p className="message-error" role="alert">{agentsError}<button className="icon-button" title="刷新模型配置" aria-label="刷新模型配置" onClick={() => setAgentsOpen(true)}><RotateCcw size={14} /></button></p>}
-            <div className="composer-options">
-              {health?.solve_agents && <label><Cpu size={14} />Solve Agent
-                <select aria-label="Solve Agent" value={agentId} disabled={sending || active || questionBusy || fileUploading || !agents}
-                  onChange={event => setAgentId(event.target.value)}>
-                  {!agents && <option value="">正在载入</option>}
-                  {agents?.items.filter(item => item.enabled).map(item => <option key={item.id} value={item.id} disabled={!item.credential_ready || (!agents.solving_available && !item.builtin)}>
-                    {item.name}{item.id === agents.default_id ? '（默认）' : ''}{!item.credential_ready ? '（缺少凭据）' : ''}
-                  </option>)}
-                </select>
-              </label>}
-              <label><SlidersHorizontal size={14} />解答方式
-              <select aria-label="解答方式" value={responseStyle} disabled={sending || active || questionBusy || fileUploading || !supportsPresentation}
-                onChange={event => setResponseStyle(event.target.value as ResponseStyle)}>
-                <option value="auto">按问题要求</option><option value="answer">仅答案</option>
-                <option value="brief">简要过程</option><option value="detailed">详细讲解</option>
-              </select>
-            </label></div>
+            {agentsError && <p className="message-error" role="alert">{agentsError}</p>}
             <div ref={setQuestionUploadTarget} data-testid="question-upload-slot" />
             <form className="composer" onSubmit={event => { event.preventDefault(); void send(); }}>
               <textarea ref={composer} aria-label="数学问题" placeholder={attachment ? '补充解题要求（可留空）…' : '输入数学问题…'} maxLength={draftLimit} value={draft}
@@ -490,11 +495,8 @@ export default function App() {
               <span>{draft.length.toLocaleString()} / {draftLimit.toLocaleString()}</span></div>
           </div>
         </main>
-        <aside className="progress-panel">{progressPanel}</aside>
       </div>
     </div>
-    {libraryOpen && <LibraryPanel onClose={() => setLibraryOpen(false)} />}
-    {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} onChange={updateAgents} />}
     {drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)}>
       <div ref={drawerElement} className={`drawer drawer-${drawer}`} role="dialog" aria-modal="true" aria-label={drawer === 'sessions' ? '会话列表' : '执行进度'}
         onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') setDrawer(null); }}>
@@ -502,5 +504,10 @@ export default function App() {
         {drawer === 'sessions' ? sessionSidebar : progressPanel}
       </div>
     </div>}
-  </div>;
+  </div>
+  {settingsSection && <SettingsPage section={settingsSection} health={health} agents={agents}
+    agentId={agentId} responseStyle={responseStyle} locked={sending || active || questionBusy || fileUploading}
+    agentsError={agentsError} onAgentChange={setAgentId} onStyleChange={setResponseStyle}
+    onAgentsChange={updateAgents} onNavigate={navigateSettings} onGuardChange={registerGuard} />}
+  </>;
 }

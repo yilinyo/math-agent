@@ -29,6 +29,8 @@ def main() -> None:
     from agent_platform.custom_library import CustomLibrary
 
     library = CustomLibrary(args.library_dir)
+    from agent_platform.knowledge_resources import KnowledgeResources
+    resources = KnowledgeResources()
     runtime, store, documents = None, None, None
     if args.rag_dir:
         if not args.embedding_model_dir:
@@ -79,7 +81,8 @@ def main() -> None:
     agents = SolveAgents(args.agents_dir, model=getattr(runtime.client, "model", "default") if runtime else "Fake demo",
                          available=runtime is not None, tester=test_agent if runtime else None)
     uvicorn.run(create_app(runtime=runtime, store=store, documents=documents,
-                          question_dir=args.question_dir, library=library, solve_agents=agents), host=args.host, port=args.port,
+                          question_dir=args.question_dir, library=library, solve_agents=agents,
+                          resources=resources), host=args.host, port=args.port,
                 access_log=False)
 
 

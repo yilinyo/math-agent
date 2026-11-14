@@ -7,7 +7,9 @@ const empty = (kind: LibraryDraft['kind']): LibraryDraft => ({ kind, title: '', 
 const draftOf = (item: LibraryItem): LibraryDraft => ({ kind: item.kind, title: item.title,
   category: item.category, keywords: item.keywords, content: item.content, enabled: item.enabled });
 
-export default function LibraryPanel({ onClose }: { onClose: () => void }) {
+export default function LibraryPanel({ onClose, embedded = false, onGuardChange }: {
+  onClose: () => void; embedded?: boolean; onGuardChange?: (guard: () => boolean) => void;
+}) {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [kind, setKind] = useState<LibraryDraft['kind']>('strategy');
   const [draft, setDraft] = useState(empty('strategy'));
@@ -23,6 +25,10 @@ export default function LibraryPanel({ onClose }: { onClose: () => void }) {
   const file = useRef<HTMLInputElement>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(selected ? draftOf(selected) : empty(kind));
   const canLeave = () => !busy && (!dirty || window.confirm('尚有未保存的修改，是否放弃？'));
+  useEffect(() => {
+    onGuardChange?.(() => !busy && (!dirty || window.confirm('尚有未保存的修改，是否放弃？')));
+    return () => onGuardChange?.(() => true);
+  }, [busy, dirty, onGuardChange]);
   const close = () => { if (canLeave()) onClose(); };
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -38,8 +44,12 @@ export default function LibraryPanel({ onClose }: { onClose: () => void }) {
     setError(''); setSaved(''); setPreview(false); setConfirmDelete(false);
   };
   async function reload() {
+    if (!canLeave()) return;
     setBusy(true); setError('');
-    try { setItems((await getLibrary()).items); setLoaded(true); }
+    try {
+      setItems((await getLibrary()).items); setLoaded(true);
+      setSelected(undefined); setDraft(empty(kind)); setPreview(false); setConfirmDelete(false);
+    }
     catch (failure) { setError(errorMessage(failure)); }
     finally { setBusy(false); }
   }
@@ -65,9 +75,10 @@ export default function LibraryPanel({ onClose }: { onClose: () => void }) {
   }
   const filtered = items.filter(item => item.kind === kind
     && `${item.title} ${item.category} ${item.keywords} ${item.content}`.toLowerCase().includes(query.trim().toLowerCase()));
-  return <div className="library-backdrop" onClick={close}>
-    <aside className="library-panel" role="dialog" aria-modal="true" aria-labelledby="library-heading" ref={panel}
+  return <div className={embedded ? 'settings-editor' : 'library-backdrop'} onClick={embedded ? undefined : close}>
+    <aside className="library-panel" role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-labelledby="library-heading" ref={panel}
       onClick={event => event.stopPropagation()} onKeyDown={event => {
+        if (embedded) return;
         if (event.key === 'Escape') { event.stopPropagation(); close(); }
         if (event.key === 'Tab') {
           const controls = Array.from(panel.current!.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)'))
@@ -79,7 +90,7 @@ export default function LibraryPanel({ onClose }: { onClose: () => void }) {
       }}>
       <header className="library-header"><h2 id="library-heading"><BookOpen size={18} />自定义知识</h2>
         <div><button className="icon-button" disabled={busy} title="刷新列表" aria-label="刷新知识列表" onClick={() => void reload()}><RotateCcw size={17} /></button>
-          <button className="icon-button" disabled={busy} title="关闭" aria-label="关闭知识面板" onClick={close}><X size={19} /></button></div></header>
+          {!embedded && <button className="icon-button" disabled={busy} title="关闭" aria-label="关闭知识面板" onClick={close}><X size={19} /></button>}</div></header>
       <div className="library-tabs" role="tablist" aria-label="知识类型">
         <button role="tab" aria-selected={kind === 'strategy'} aria-controls="library-list" disabled={busy} onClick={() => reset('strategy')}>策略 <span>{items.filter(item => item.kind === 'strategy').length}</span></button>
         <button role="tab" aria-selected={kind === 'skill'} aria-controls="library-list" disabled={busy} onClick={() => reset('skill')}>Skills <span>{items.filter(item => item.kind === 'skill').length}</span></button>

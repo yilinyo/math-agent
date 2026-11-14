@@ -24,6 +24,7 @@ else:
     import fcntl
 
 import numpy as np
+from reasoning_agent.resource_files import resource_lock, index_stamp
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = REPO_ROOT / "strategy_data"
@@ -269,12 +270,14 @@ def get_shared_strategy_retriever(
     """
     selected_device = device or preferred_device()
     key = (data_dir.resolve(), model_dir.resolve(), selected_device)
-    with _SHARED_RETRIEVERS_LOCK:
+    with resource_lock(key[0]), _SHARED_RETRIEVERS_LOCK:
+        stamp = index_stamp(key[0])
         retriever = _SHARED_RETRIEVERS.get(key)
-        if retriever is None:
+        if retriever is None or getattr(retriever, '_resource_stamp', None) != stamp:
             retriever = StrategyRetriever(
                 data_dir=data_dir, model_dir=model_dir, device=selected_device,
             )
+            retriever._resource_stamp = stamp
             _SHARED_RETRIEVERS[key] = retriever
         return retriever
 

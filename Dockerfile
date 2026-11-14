@@ -37,7 +37,8 @@ ARG TORCH_INDEX_URL=https://mirror.sjtu.edu.cn/pytorch-wheels/cpu
 USER root
 RUN python -m pip install --no-cache-dir torch --index-url "$TORCH_INDEX_URL" \
     && python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements-platform-m5.txt
-COPY strategy_data/ strategy_data/
+COPY --chown=maths:maths strategy_data/ strategy_data/
+RUN chown -R maths:maths /app/skill2_en
 USER maths
 EXPOSE 8000
 CMD ["python", "-m", "agent_platform", "--host", "0.0.0.0", "--port", "8000", "--runtime", "langgraph", "--client-provider", "deployment_bootstrap:provided_client", "--function-calling", "off", "--question-dir", "/var/lib/maths/questions"]

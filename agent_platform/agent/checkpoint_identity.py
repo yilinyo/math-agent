@@ -11,6 +11,7 @@ LEGACY_DIRS = ("agent_platform", "reasoning_agent/custom2", "reasoning_agent/cus
 RESOURCE_FILES = (
     "reasoning_agent/action_graph/strategy_cards.py", "reasoning_agent/strategy_retrieval.py",
     "reasoning_agent/lexical_strategy_retrieval.py", "reasoning_agent/hybrid_strategy_retrieval.py",
+    "reasoning_agent/strategy_documents.py", "reasoning_agent/resource_files.py",
     "strategy_data/strategy_lexical_manifest.json", "strategy_data/strategy_index.json",
 )
 

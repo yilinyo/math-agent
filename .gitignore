@@ -38,6 +38,10 @@ sample_data/
 venv/
 client/dist/
 *.safetensors
+strategy_data/.resources.lock
+strategy_data/.resources-version
+strategy_data/.resources-transaction.json
+strategy_data/.resource-edit-*/
 *.safetensors.part-*
 *.safetensors.parts.json
 .DS_Store

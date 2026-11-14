@@ -26,7 +26,12 @@ export interface TraceEvent {
   task_id: string; session_id: string; sequence: number; stage_id: string;
   event_type: string; created_at: string; payload: Record<string, unknown>;
 }
-export interface Health { status: string; runtime_mode: string; storage: string; restart_durable: boolean; response_styles?: ResponseStyle[]; server_history?: boolean; document_search?: string; question_attachments?: boolean; question_submission?: string | null; custom_library?: boolean; solve_agents?: boolean }
+export interface Health { status: string; runtime_mode: string; storage: string; restart_durable: boolean; response_styles?: ResponseStyle[]; server_history?: boolean; document_search?: string; question_attachments?: boolean; question_submission?: string | null; custom_library?: boolean; solve_agents?: boolean; knowledge_resources?: boolean }
+export type ResourceKind = 'skill' | 'strategy';
+export interface ResourceSummary { id: string; title: string; category: string; source: string }
+export interface ResourceDetail extends ResourceSummary { kind: ResourceKind; revision: string; content: string }
+export interface ResourcePage { items: ResourceSummary[]; total: number; corpus_total: number; next_offset: number | null;
+  indexes: { lexical: boolean; vector: boolean; embedding_dim?: number; embedding_model?: string } }
 export interface AgentSummary { id: string; name: string; model: string; revision: number }
 export interface AgentDraft { name: string; provider: 'intern' | 'compatible'; api_url: string; model: string; credential_env: string;
   temperature: number; max_tokens: number; timeout: number; preference: string; enabled: boolean }
@@ -50,6 +55,14 @@ export class ApiError extends Error {
   constructor(public code: string, public status: number) { super(code); }
 }
 const messages: Record<string, string> = {
+  resource_busy: '有解题任务正在使用资源，请等待任务结束后保存。',
+  resource_conflict: '资源已被其他页面修改，请刷新后重新编辑。',
+  resource_not_found: '未找到该资源，请刷新列表。',
+  resource_unavailable: '资源暂不可用，请检查后端日志与资源目录的读写权限。',
+  resource_invalid: '内容不能为空。', resource_invalid_strategy: '策略 JSON 格式无效，请保留原 ID、已有字段和字段类型。',
+  resource_invalid_new_strategy: '请填写名称、描述、标签、适用条件、步骤及 example 中的 problem、solution；ID 由服务端分配。',
+  resource_invalid_index: '策略索引与语料不匹配，请检查后端索引文件。',
+  resource_embedding_failed: '本地向量编码失败，原策略和索引保持不变。请检查模型和后端日志。',
   solve_agents_unavailable: '当前服务未启用真实模型配置，请使用 langgraph 模式启动后端。',
   solve_agent_not_found: 'Agent 已被删除，请刷新配置。', solve_agent_disabled: '该 Agent 已停用，请选择其他 Agent。',
   solve_agent_credential_missing: '后端未读取到凭据环境变量。请在启动后端的终端设置变量后重新启动服务。',
@@ -84,8 +97,8 @@ const messages: Record<string, string> = {
 export const errorMessage = (error: unknown) => error instanceof ApiError
   ? messages[error.code] || '请求未成功，请稍后重试。' : '连接未成功，请检查服务后重试。';
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const timeout = AbortSignal.timeout(10000);
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 10000): Promise<T> {
+  const timeout = AbortSignal.timeout(timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const headers = options.body instanceof FormData ? options.headers : { 'Content-Type': 'application/json', ...options.headers };
   const response = await fetch(path, { ...options, signal, headers });
@@ -96,6 +109,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json();
 }
 export const getHealth = (signal?: AbortSignal) => request<Health>('/health/ready', { signal });
+export const getResources = (kind: ResourceKind, query: string, offset: number, signal?: AbortSignal) =>
+  request<ResourcePage>(`/v1/resources/${kind}?q=${encodeURIComponent(query)}&offset=${offset}`, { signal });
+export const getResource = (kind: ResourceKind, id: string, signal?: AbortSignal) =>
+  request<ResourceDetail>(`/v1/resources/${kind}/${encodeURIComponent(id)}`, { signal });
+export const saveResource = (item: ResourceDetail, content: string) =>
+  request<ResourceDetail>(`/v1/resources/${item.kind}/${encodeURIComponent(item.id)}`,
+    { method: 'PUT', body: JSON.stringify({ revision: item.revision, content }) }, 180000);
+export const createStrategy = (content: string) => request<ResourceDetail>('/v1/resources/strategy',
+  { method: 'POST', body: JSON.stringify({ content }) }, 180000);
 export const getAgents = (signal?: AbortSignal) => request<AgentCatalog>('/v1/solve-agents', { signal });
 export const saveAgent = (draft: AgentDraft, item?: SolveAgent) => request<SolveAgent>(
   item ? `/v1/solve-agents/${encodeURIComponent(item.id)}` : '/v1/solve-agents', {

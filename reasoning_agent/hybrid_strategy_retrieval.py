@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from reasoning_agent.resource_files import resource_lock
 from pathlib import Path
 from typing import Any
 
@@ -197,6 +198,14 @@ class HybridStrategyRetriever:
         self.fusion_mode = fusion_mode
 
     def retrieve_for_structure(
+        self, raw_problem: str, retrieval_text: str, *, top_k: int = 5,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        # Both channels must observe one published resource generation.
+        with resource_lock(self.data_dir):
+            return self._retrieve_for_structure(raw_problem, retrieval_text, top_k=top_k, metadata=metadata)
+
+    def _retrieve_for_structure(
         self,
         raw_problem: str,
         retrieval_text: str,

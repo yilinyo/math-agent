@@ -7,9 +7,10 @@ import json
 import math
 import re
 import unicodedata
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+from reasoning_agent.resource_files import resource_lock, index_stamp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,29 @@ def normalize_scores(scores: list[float]) -> list[float]:
     if high <= low:
         return [1.0 if high > 0 else 0.0 for _ in scores]
     return [(score - low) / (high - low) for score in scores]
+
+
+def build_lexical_payloads(cards):
+    """Use the same index construction for offline builds and resource edits."""
+    docs = [tokenize(card_text(card)) for card in cards]
+    df = Counter(term for doc in docs for term in doc)
+    total = len(docs)
+    idf = {term: math.log(1.0 + (total - count + 0.5) / (count + 0.5)) for term, count in sorted(df.items())}
+    postings = defaultdict(list)
+    packed_docs = []
+    for row, doc in enumerate(docs):
+        for term, tf in doc.items():
+            postings[term].append([row, tf])
+        norm = math.sqrt(sum((tf * idf[term]) ** 2 for term, tf in doc.items()))
+        packed_docs.append({'length': sum(doc.values()), 'norm': norm, 'tf': dict(sorted(doc.items()))})
+    ids = [card.get('id') for card in cards]
+    index = {'rules_version': LEXICAL_RULES_VERSION, 'card_ids': ids, 'cards': cards, 'idf': idf,
+             'postings': dict(sorted(postings.items())), 'documents': packed_docs,
+             'avgdl': sum(doc['length'] for doc in packed_docs) / max(1, total)}
+    manifest = {'version': '1', 'rules_version': LEXICAL_RULES_VERSION, 'cards_digest': cards_digest(cards),
+                'card_ids': ids, 'document_count': total, 'vocabulary_size': len(idf),
+                'bm25': {'k1': 1.2, 'b': 0.75}, 'tfidf': {'l2_normalized': True}}
+    return index, manifest
 
 
 class LexicalStrategyRetriever:
@@ -162,6 +186,11 @@ _SHARED: dict[Path, LexicalStrategyRetriever] = {}
 
 def get_shared_lexical_strategy_retriever(*, data_dir: Path = DEFAULT_DATA_DIR) -> LexicalStrategyRetriever:
     key = Path(data_dir).resolve()
-    if key not in _SHARED:
-        _SHARED[key] = LexicalStrategyRetriever(key)
-    return _SHARED[key]
+    with resource_lock(key):
+        stamp = index_stamp(key)
+        retriever = _SHARED.get(key)
+        if retriever is None or getattr(retriever, '_resource_stamp', None) != stamp:
+            retriever = LexicalStrategyRetriever(key)
+            retriever._resource_stamp = stamp
+            _SHARED[key] = retriever
+        return retriever

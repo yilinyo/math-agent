@@ -11,11 +11,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+import sys
 
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from reasoning_agent.strategy_documents import build_strategy_text
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,32 +27,6 @@ DEFAULT_MODEL = REPO_ROOT / "strategyrag" / "Qwen3-Embedding-0.6B"
 DEFAULT_OUTPUT = REPO_ROOT / "strategy_data"
 MODEL_ID = "Qwen/Qwen3-Embedding-0.6B"
 FIELDS_USED = ["name", "tags", "description", "applicability", "steps"]
-
-
-def build_strategy_text(item: dict[str, Any]) -> str:
-    """Construct the stable document text used by the retrieval index."""
-    applicability = item.get("applicability", [])
-    if not isinstance(applicability, list):
-        applicability = [str(applicability)]
-    tags = item.get("tags", [])
-    if not isinstance(tags, list):
-        tags = [str(tags)]
-    steps = item.get("steps", [])
-    if not isinstance(steps, list):
-        steps = []
-    step_text = "; ".join(
-        f"{str(step.get('step', '')).strip()}: {str(step.get('detail', '')).strip()}"
-        for step in steps
-        if isinstance(step, dict)
-        and (str(step.get("step", "")).strip() or str(step.get("detail", "")).strip())
-    )
-    return (
-        f"Strategy: {item.get('name', '').strip()}\n"
-        f"Tags: {'; '.join(str(tag).strip() for tag in tags)}\n"
-        f"Description: {item.get('description', '').strip()}\n"
-        f"Applicable when: {'; '.join(str(part).strip() for part in applicability)}\n"
-        f"Key derivation: {step_text}"
-    )
 
 
 def preferred_device() -> str:

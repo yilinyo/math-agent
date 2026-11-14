@@ -11,4 +11,8 @@ it('uses one composer without mode switches or reference attachment controls', (
   expect(html).not.toContain('参考附件');
   expect(html).not.toContain('上传附件');
   expect(html).not.toContain('参考来源');
+  expect(html).toContain('aria-label="设置"');
+  expect(html).not.toContain('策略与 Skills');
+  expect(html).not.toContain('模型与 Agents');
+  expect(html).not.toContain('<select');
 });

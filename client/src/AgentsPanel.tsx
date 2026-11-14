@@ -7,7 +7,10 @@ const empty = (): AgentDraft => ({ name: '', provider: 'compatible', api_url: ''
 const draftOf = (item: SolveAgent): AgentDraft => ({ ...empty(), ...Object.fromEntries(
   Object.keys(empty()).map(key => [key, item[key as keyof SolveAgent] ?? empty()[key as keyof AgentDraft]])) });
 
-export default function AgentsPanel({ onClose, onChange }: { onClose: () => void; onChange: (catalog: AgentCatalog) => void }) {
+export default function AgentsPanel({ onClose, onChange, embedded = false, onGuardChange }: {
+  onClose: () => void; onChange: (catalog: AgentCatalog) => void; embedded?: boolean;
+  onGuardChange?: (guard: () => boolean) => void;
+}) {
   const [catalog, setCatalog] = useState<AgentCatalog>();
   const [selected, setSelected] = useState<SolveAgent>();
   const [draft, setDraft] = useState<AgentDraft>(empty());
@@ -18,6 +21,10 @@ export default function AgentsPanel({ onClose, onChange }: { onClose: () => void
   const panel = useRef<HTMLElement>(null);
   const dirty = !selected?.builtin && JSON.stringify(draft) !== JSON.stringify(selected ? draftOf(selected) : empty());
   const canLeave = () => !busy && (!dirty || window.confirm('尚有未保存的修改，是否放弃？'));
+  useEffect(() => {
+    onGuardChange?.(() => !busy && (!dirty || window.confirm('尚有未保存的修改，是否放弃？')));
+    return () => onGuardChange?.(() => true);
+  }, [busy, dirty, onGuardChange]);
   const close = () => { if (canLeave()) onClose(); };
   const apply = (value: AgentCatalog) => { setCatalog(value); onChange(value); };
   useEffect(() => {
@@ -63,9 +70,10 @@ export default function AgentsPanel({ onClose, onChange }: { onClose: () => void
     finally { setBusy(false); }
   }
   const set = <K extends keyof AgentDraft>(key: K, value: AgentDraft[K]) => setDraft(previous => ({ ...previous, [key]: value }));
-  return <div className="library-backdrop" onClick={close}>
-    <aside className="library-panel agents-panel" role="dialog" aria-modal="true" aria-labelledby="agents-heading" ref={panel}
+  return <div className={embedded ? 'settings-editor' : 'library-backdrop'} onClick={embedded ? undefined : close}>
+    <aside className="library-panel agents-panel" role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-labelledby="agents-heading" ref={panel}
       onClick={event => event.stopPropagation()} onKeyDown={event => {
+        if (embedded) return;
         if (event.key === 'Escape') { event.stopPropagation(); close(); }
         if (event.key === 'Tab') {
           const controls = Array.from(panel.current!.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)'))
@@ -77,7 +85,7 @@ export default function AgentsPanel({ onClose, onChange }: { onClose: () => void
       }}>
       <header className="library-header"><h2 id="agents-heading"><Cpu size={18} />模型与 Agents</h2><div>
         <button className="icon-button" disabled={busy} title="刷新" aria-label="刷新 Agents" onClick={() => void reload()}><RotateCcw size={17} /></button>
-        <button className="icon-button" disabled={busy} title="关闭" aria-label="关闭模型配置" onClick={close}><X size={19} /></button>
+        {!embedded && <button className="icon-button" disabled={busy} title="关闭" aria-label="关闭模型配置" onClick={close}><X size={19} /></button>}
       </div></header>
       <div className="library-scroll">
         <div className="library-search"><Search size={16} /><input aria-label="搜索 Agent" placeholder="搜索名称或模型" value={query} onChange={event => setQuery(event.target.value)} />
