@@ -7,6 +7,7 @@ WORKDIR /build/client
 COPY client/package.json client/package-lock.json ./
 RUN npm ci --registry="$NPM_REGISTRY"
 COPY client/ ./
+COPY agent_platform/static/trace-format.js agent_platform/static/trace-format.d.ts /build/agent_platform/static/
 RUN npm run build
 
 FROM ${PYTHON_IMAGE} AS runtime

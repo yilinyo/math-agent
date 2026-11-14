@@ -18,6 +18,7 @@ from agent_platform.safety import sanitize, validate_metadata
 from agent_platform.service import TaskService
 from agent_platform.storage import InMemoryTaskStore, TaskStore
 from agent_platform.references import public_references
+from agent_platform.timing import task_timing
 
 
 class LocalRateLimiter:
@@ -59,13 +60,14 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
                finalize_reserve_seconds: float = 25, heartbeat_seconds: float = 15,
                poll_seconds: float = 0.1, rate_limits: bool = True, documents=None,
                task_service=None, limiter=None, event_transport=None, readiness=None,
-               operational_health=None, question_dir=None) -> FastAPI:
+               operational_health=None, question_dir=None, library=None, solve_agents=None) -> FastAPI:
     if not 0 < heartbeat_seconds <= 15 or poll_seconds <= 0:
         raise ValueError("invalid_stream_configuration")
     repository = store if store is not None else InMemoryTaskStore()
     runtime = runtime if runtime is not None else FakeRuntime()
     service = task_service or TaskService(repository, runtime, max_concurrency, budget_seconds,
                                          finalize_reserve_seconds)
+    service.solve_agents = solve_agents
     limiter = limiter or LocalRateLimiter()
     streams = StreamBudget()
     questions = None
@@ -97,6 +99,8 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
     app.state.streams = streams
     app.state.documents = documents
     app.state.questions = questions
+    app.state.library = library
+    app.state.solve_agents = solve_agents
     if documents or questions:
         from agent_platform.rag.upload import UploadLimit
         app.add_middleware(UploadLimit)
@@ -115,6 +119,11 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
         if rate_limits:
             limiter.consume(group, key, capacity, per_second)
 
+    from agent_platform.custom_library import library_router
+    app.include_router(library_router(library, limit))
+    from agent_platform.solve_agents import solve_agents_router, public_agent, SNAPSHOT_KEY, REQUEST_KEY
+    app.include_router(solve_agents_router(solve_agents, limit))
+
     def task_view(task: Task) -> dict:
         base = f"/v1/sessions/{task.session_id}/tasks/{task.id}"
         return sanitize({
@@ -122,12 +131,15 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
             "runtime_mode": task.runtime_mode, "current_stage": task.current_stage,
             "final_response": task.final_response, "error_code": task.error_code,
             "response_style": task.metadata.get(RESPONSE_STYLE_KEY),
+            "solve_agent": public_agent(task.metadata.get(SNAPSHOT_KEY)),
             "references": public_references(task),
             "question_source": task.metadata.get("_question_source"),
             "accepted_at": task.accepted_at.isoformat(),
             "started_at": task.started_at.isoformat() if task.started_at else None,
             "deadline_at": task.deadline_at.isoformat() if task.deadline_at else None,
             "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+            "stopped_at": task.stopped_at.isoformat() if task.stopped_at else None,
+            "timing": task_timing(task),
             "active_runtime_limit_seconds": budget_seconds,
             "queue_position": repository.queue_position(task.id),
             "checkpoint_available": task.checkpoint is not None,
@@ -142,6 +154,11 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
     async def trace_viewer():
         return FileResponse(Path(__file__).parent / "static" / "index.html",
                             headers={"Cache-Control": "no-store"})
+
+    @app.get("/trace-assets/trace-format.js", include_in_schema=False)
+    async def trace_formatter():
+        return FileResponse(Path(__file__).parent / "static" / "trace-format.js",
+                            media_type="text/javascript", headers={"Cache-Control": "no-store"})
 
     @app.get("/health/live")
     async def live():
@@ -169,6 +186,8 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
             "server_history": True,
             "question_attachments": questions is not None,
             "question_submission": "explicit_send" if questions else None,
+            "custom_library": library is not None,
+            "solve_agents": solve_agents is not None,
         }, status
 
     @app.get("/health/ready")
@@ -230,7 +249,7 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
         limit("task_global", "deployment", 10, 10)
         limit("task_session", session_id, 2, 2)
         metadata = dict(body.metadata or {})
-        if RESPONSE_STYLE_KEY in metadata or "_question_source" in metadata or "_question_instruction" in metadata:
+        if any(key in metadata for key in (RESPONSE_STYLE_KEY, "_question_source", "_question_instruction", SNAPSHOT_KEY, REQUEST_KEY)):
             raise PlatformError("reserved_metadata_field", 400)
         if body.response_style is not None:
             metadata[RESPONSE_STYLE_KEY] = body.response_style
@@ -253,7 +272,7 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
                         raise PlatformError("document_not_ready", 409)
         metadata = validate_metadata(metadata)
         task = service.submit(session_id, body.problem, metadata,
-                              idempotency_key, check_selection)
+                              idempotency_key, check_selection, solve_agent_id=body.solve_agent_id)
         return task_view(task)
 
     def question_service(session_id):
@@ -320,7 +339,7 @@ def create_app(*, store: TaskStore | None = None, runtime: AgentRuntime | None =
     async def start_questions(session_id: str, batch_id: str, body: QuestionBatchStart):
         batches = question_service(session_id)
         limit("mutation", session_id, 10, 10)
-        return batches.view(batches.begin(session_id, batch_id, body.prompt, body.response_style), task_view)
+        return batches.view(batches.begin(session_id, batch_id, body.prompt, body.response_style, body.solve_agent_id), task_view)
 
     @app.post("/v1/sessions/{session_id}/question-batches/{batch_id}/cancel")
     async def cancel_questions(session_id: str, batch_id: str):

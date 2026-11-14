@@ -10,6 +10,7 @@ from agent_platform.models import (
 )
 from agent_platform.safety import sanitize, sanitize_text
 from agent_platform.history import cursor_member, member, page_cursor, session_summary
+from agent_platform.timing import record_task_timing
 
 
 class InMemoryTaskStore:
@@ -136,6 +137,7 @@ class InMemoryTaskStore:
 
     def _event(self, task: Task, event_type: str, stage_id: str,
                payload: dict[str, Any]) -> None:
+        payload = record_task_timing(task, event_type, payload, utc_now())
         operation_id = payload.get("operation_id")
         if event_type == "model.started":
             call_type = payload["call_type"]

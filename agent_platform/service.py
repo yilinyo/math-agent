@@ -1,10 +1,13 @@
 import asyncio
 import itertools
+import time
 from datetime import datetime, timezone
 from typing import Callable
+from uuid import uuid4
 
 from agent_platform.models import PlatformError, Task, TaskStatus
 from agent_platform.runtime import AgentRuntime, CheckpointIncompatible, RuntimeContext
+from agent_platform.safety import sanitize_text
 from agent_platform.storage import TaskStore
 
 
@@ -29,6 +32,7 @@ class TaskService:
         self._executions: dict[str, asyncio.Task] = {}
         self._reconciler: asyncio.Task | None = None
         self.accepting = False
+        self.solve_agents = None
 
     async def start(self) -> None:
         if self.accepting:
@@ -65,9 +69,17 @@ class TaskService:
                                     next(self._delivery_sequence), task.session_id, task.id))
 
     def submit(self, session_id: str, problem: str, metadata: dict,
-               idempotency_key: str | None, before_create: Callable[[], None] | None = None) -> Task:
+               idempotency_key: str | None, before_create: Callable[[], None] | None = None,
+               *, solve_agent_id: str | None = None) -> Task:
         if not self.accepting:
             raise PlatformError("not_ready", 503)
+        from agent_platform.solve_agents import SNAPSHOT_KEY, REQUEST_KEY
+        if self.solve_agents is not None and SNAPSHOT_KEY not in metadata:
+            snapshot = self.solve_agents.submission(self.store, session_id, idempotency_key, solve_agent_id)
+            if snapshot is not None:
+                metadata = {SNAPSHOT_KEY: snapshot, REQUEST_KEY: solve_agent_id, **metadata}
+        elif solve_agent_id is not None and self.solve_agents is None:
+            raise PlatformError("solve_agents_unavailable", 503)
         task, created = self.store.create_task(
             session_id, problem, metadata, self.runtime.name, idempotency_key, before_create,
         )
@@ -163,6 +175,7 @@ class TaskService:
             result = await asyncio.wait_for(execution, max(0, remaining - self.finalize_reserve_seconds))
             if not isinstance(result.final_response, str) or not result.final_response.strip():
                 raise ValueError("empty_final_response")
+            await self._publish_response(task, result.final_response)
             self.store.finish(task.session_id, task.id, task.generation,
                               TaskStatus.SUCCEEDED, result.final_response)
         except asyncio.CancelledError:
@@ -189,3 +202,22 @@ class TaskService:
                 renewal.cancel()
                 await asyncio.gather(renewal, return_exceptions=True)
             self._executions.pop(task.id, None)
+
+    async def _publish_response(self, task: Task, response: str) -> None:
+        # Redact the entire accepted answer before splitting across event boundaries.
+        response = sanitize_text(response)
+        stream_id = str(uuid4())
+        chunk_size = max(96, (len(response) + 127) // 128)
+        chunks = [response[index:index + chunk_size] for index in range(0, len(response), chunk_size)]
+
+        def record(event_type: str, payload: dict) -> None:
+            self.store.record(task.session_id, task.id, task.generation, "finalize",
+                              event_type, {"stream_id": stream_id, **payload})
+
+        started = time.monotonic()
+        record("answer.started", {})
+        for index, text in enumerate(chunks):
+            record("answer.delta", {"index": index, "text": text})
+            await asyncio.sleep(0)
+        record("answer.completed", {"chunks": len(chunks),
+                                    "duration_ms": max(0, int((time.monotonic() - started) * 1000))})

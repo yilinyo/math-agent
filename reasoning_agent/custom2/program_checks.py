@@ -1,10 +1,12 @@
 import ast
 from dataclasses import dataclass
 from fractions import Fraction
+import io
 import itertools
 import math
 import re
 import time
+import tokenize
 
 
 class CheckLimit(ValueError):
@@ -212,6 +214,49 @@ def check_expression(expression: str, source: str = "requested", *, max_steps: i
         return ProgramCheck(expression, source, "unsupported", "仅支持白名单数学表达式")
     except (ArithmeticError, ValueError, TypeError, IndexError, RecursionError):
         return ProgramCheck(expression, source, "error", "表达式无法计算，不能据此判定数学结论")
+
+
+def equivalent_numeric_answers(answers: list[str], *, timeout: float = 0.1) -> bool:
+    """Prove exact equivalence for a small set of numeric LaTeX expressions."""
+    if not answers or len(answers) > 8:
+        return False
+    calculator = BoundedCalculator(timeout=timeout)
+    values = []
+    try:
+        for answer in answers:
+            if len(answer) > 500:
+                return False
+            expression = answer.strip()
+            for spacing in (r"\left", r"\right", r"\,", r"\!", r"\;", r"\quad"):
+                expression = expression.replace(spacing, " ")
+            expression = expression.replace(r"\times", "*").replace(r"\cdot", "*")
+            for _ in range(8):
+                expression = re.sub(r"\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}",
+                                    r"((\1)/(\2))", expression)
+            expression = expression.replace("^", "**").replace("{", "(").replace("}", ")")
+            if not re.fullmatch(r"[\d\s+*/().\-]+", expression):
+                return False
+            tokens = []
+            # Decimal literals must stay exact: float parsing could equate a
+            # rounded decimal with a distinct fraction.
+            for token in tokenize.generate_tokens(io.StringIO(expression).readline):
+                if token.type == tokenize.NUMBER:
+                    if len(token.string) > 128 or not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", token.string):
+                        return False
+                    number = Fraction(token.string)
+                    tokens.append(f"({number.numerator}/{number.denominator})" if "." in token.string else token.string)
+                elif token.type == tokenize.OP and token.string in {"+", "-", "*", "/", "**", "(", ")"}:
+                    tokens.append(token.string)
+                elif token.type not in {tokenize.NEWLINE, tokenize.NL, tokenize.ENDMARKER}:
+                    return False
+            value = calculator.evaluate(" ".join(tokens))
+            if type(value) not in {int, Fraction}:
+                return False
+            values.append(value)
+        return all(value == values[0] for value in values[1:])
+    except (CheckLimit, UnsupportedCheck, SyntaxError, tokenize.TokenError,
+            ArithmeticError, ValueError, TypeError, RecursionError):
+        return False
 
 
 def requested_checks(text: str) -> list[str]:

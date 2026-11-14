@@ -150,32 +150,93 @@ def log_runtime_event(task_id, stage, event_type, payload=None):
         "tool.committed": "工具提交", "tool.replayed": "工具重放",
         "tool_fallback.started": "工具回退开始", "tool_fallback.completed": "工具回退完成",
         "verification.completed": "校验完成", "stage.recovered_error": "节点异常恢复",
+        "stage.context": "阶段信息", "stage.outcome": "阶段结果", "checks.completed": "本地检查汇总",
+        "library.selected": "自定义资料选入", "library.injected": "自定义资料注入",
     }
+    payload = payload or {}
+    if event_type == "reasoning.event":
+        operation_labels = {
+            "final_candidate_checked": "最终候选验收" if stage == "finalize" else "候选返回检查", "final_acceptance_failed": "最终验收失败",
+            "compressed_solution_invalid": "压缩解答不完整", "recovery_routed": "选择修复路径",
+            "best_candidate_saved": "保留候选草稿", "deadline_candidate_selected": "选择时限内候选",
+            "model_fidelity_unavailable": "题意检查未完成", "model_fidelity_skipped": "跳过题意检查",
+        }
+        label = operation_labels.get(payload.get("operation"))
+        if label is None:
+            return
+        labels[event_type] = label
     if event_type not in labels:
         return
-    payload = payload or {}
     details = []
+    readable = {
+        "profile": "题意分析", "retrieve": "策略检索", "plan": "解题规划", "solve": "推导求解",
+        "tool": "工具验证", "verify": "独立审查", "repair": "定向修复", "finalize": "最终验收",
+        "emergency": "应急求解", "arbitrate": "候选仲裁", "terminal": "结束",
+        "completed": "执行结束", "accepted": "答案已接受", "rejected": "答案未通过验收",
+        "needs_review": "检查发现问题", "unverified": "尚未验证通过", "recovered": "进入恢复流程",
+        "incomplete": "未产生完整候选", "pass": "通过", "fail": "不通过", "uncertain": "无法确认", "unknown": "未能确定",
+        "classifier": "题型识别", "strategy": "方法规划", "solver": "解答生成", "solver_repair": "修复解答生成",
+        "targeted_audit": "数学审查", "model_fidelity": "题意一致性检查", "math_verify": "数学检查",
+        "sympy_calculate": "符号计算", "strategy_search": "内置策略检索", "document_search": "文档检索",
+        "no_acceptable_candidate": "没有候选通过最终验收", "reasoning_content_exhausted": "未获得可用公开解答",
+    }
     for key, label in (("call_type", "调用"), ("name", "工具"), ("call_id", "调用ID"),
                        ("operation_id", "操作ID"), ("transport", "方式"), ("status", "状态"),
-                       ("error_code", "错误码"), ("error_type", "错误类型"), ("verdict", "结论")):
+                       ("error_code", "错误码"), ("error_type", "错误类型"), ("verdict", "结论"),
+                       ("next_stage", "下一步"), ("node", "执行节点"), ("candidate_source", "采用草稿"),
+                       ("source", "候选来源"), ("reason", "原因"), ("extraction", "答案提取状态")):
         value = payload.get(key)
         if isinstance(value, str):
             value = redact_trace_value(value).replace("\n", " ").replace("\r", " ")[:200]
-            details.append(f"{label}={value}")
+            translated = readable.get(value)
+            details.append(f"{label}={value}" + (f"（{translated}）" if translated else ""))
     for key, label in (("duration_ms", "耗时毫秒"), ("latency_ms", "耗时毫秒"),
-                       ("hit_count", "命中条数"), ("retry_count", "重试次数"), ("attempt", "尝试序号")):
+                       ("hit_count", "命中条数"), ("retry_count", "重试次数"), ("attempt", "尝试序号"),
+                       ("http_status", "HTTP状态"), ("attempts", "尝试次数"), ("round", "解答轮次"),
+                       ("hard_failure_count", "计算矛盾数")):
         value = payload.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
             details.append(f"{label}={value}")
     usage = payload.get("usage", {})
+    agent = payload.get("agent")
+    if isinstance(agent, dict):
+        public = {key: agent[key] for key in ("id", "name", "revision", "model", "role") if key in agent}
+        details.append("Agent=" + json.dumps(redact_trace_value(public), ensure_ascii=False))
     if isinstance(usage, dict):
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             value = usage.get(key)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 details.append(f"{key}={value}")
+    for key, label in (("accepted", "最终验收通过" if stage == "finalize" else "当前返回检查通过"), ("budget_exhausted", "检查预算耗尽"),
+                       ("confirmed_audit_failure", "存在已证实审查错误")):
+        if isinstance(payload.get(key), bool):
+            details.append(f"{label}={'是' if payload[key] else '否'}")
+    format_labels = {"multiple_final_candidates": "多个答案冲突或尚无法验证等价",
+                     "non_concept_final_answer_contains_chinese": "数值答案字段含中文"}
+    for code in (payload.get("format_failures") or [])[:8]:
+        details.append(f"格式检查={format_labels.get(code, '格式未通过')}")
+    for item in (payload.get("program_checks") or [])[:12]:
+        if isinstance(item, dict):
+            expression = redact_trace_value(str(item.get("expression", ""))).replace("\n", " ")[:500]
+            result = redact_trace_value(str(item.get("result", ""))).replace("\n", " ")[:500]
+            details.append(f"核对=[{expression} -> {result}; {item.get('verdict', 'unknown')}]")
+    for item in (payload.get("references") or [])[:20]:
+        if isinstance(item, dict):
+            reference = {key: item[key] for key in ("id", "revision", "kind", "title", "name") if key in item}
+            details.append("资料=" + json.dumps(redact_trace_value(reference), ensure_ascii=False))
+    if event_type in {"library.selected", "library.injected"}:
+        details.append(f"资料条数={len(payload.get('references') or [])}")
+    routing = {"task_budget_low": "剩余预算不足", "solver_no_candidate": "未获得可用候选",
+               "audit_requires_repair": "审查发现问题", "compare_available_candidates": "比较当前候选",
+               "finalize_existing_candidate": "按收敛或部分恢复规则进入验收", "review_finished": "审查流程结束"}
+    if payload.get("routing_reason") in routing:
+        details.append("流转依据=" + routing[payload["routing_reason"]])
     # Only selected diagnostic fields are logged, never raw model payloads.
     identifier = str(task_id).replace("\n", "").replace("\r", "")[:64]
-    stage_name = str(stage).replace("\n", "").replace("\r", "")[:32]
+    stage_labels = {"profile": "题意分析", "retrieve": "策略检索", "plan": "解题规划", "solve": "推导求解",
+                    "tool": "工具验证", "verify": "独立审查", "repair": "定向修复", "finalize": "最终验收"}
+    stage_code = str(stage).replace("\n", "").replace("\r", "")[:32]
+    stage_name = f"{stage_code}（{stage_labels.get(stage, '任务调度')}）"
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [任务 {identifier}] "
           f"[{labels[event_type]}] {stage_name} {' '.join(details)}".rstrip(), flush=True)
 

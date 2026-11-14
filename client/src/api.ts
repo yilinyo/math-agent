@@ -9,11 +9,16 @@ export const statusNames: Record<TaskStatus, string> = {
 };
 export type TaskStatus = 'queued' | 'running' | 'cancelling' | 'cancelled' | 'succeeded' | 'failed' | 'interrupted';
 export type ResponseStyle = 'auto' | 'answer' | 'brief' | 'detailed';
+export interface TaskTiming {
+  total_ms: number | null; queue_ms: number | null; processing_ms: number | null; answer_delivery_ms: number | null;
+}
 export interface Task {
+  solve_agent?: AgentSummary | null;
   id: string; session_id: string; status: TaskStatus; runtime_mode: string;
   current_stage: string | null; final_response: string | null; error_code: string | null;
   accepted_at: string; started_at: string | null; finished_at: string | null;
   deadline_at: string | null; queue_position: number; checkpoint_available: boolean;
+  stopped_at?: string | null; timing?: TaskTiming;
   response_style?: ResponseStyle | null;
   question_source?: { batch_id: string; number: number; label: string; filename: string; page_start: number | null; page_end: number | null } | null;
 }
@@ -21,7 +26,15 @@ export interface TraceEvent {
   task_id: string; session_id: string; sequence: number; stage_id: string;
   event_type: string; created_at: string; payload: Record<string, unknown>;
 }
-export interface Health { status: string; runtime_mode: string; storage: string; restart_durable: boolean; response_styles?: ResponseStyle[]; server_history?: boolean; document_search?: string; question_attachments?: boolean; question_submission?: string | null }
+export interface Health { status: string; runtime_mode: string; storage: string; restart_durable: boolean; response_styles?: ResponseStyle[]; server_history?: boolean; document_search?: string; question_attachments?: boolean; question_submission?: string | null; custom_library?: boolean; solve_agents?: boolean }
+export interface AgentSummary { id: string; name: string; model: string; revision: number }
+export interface AgentDraft { name: string; provider: 'intern' | 'compatible'; api_url: string; model: string; credential_env: string;
+  temperature: number; max_tokens: number; timeout: number; preference: string; enabled: boolean }
+export interface SolveAgent extends AgentSummary { builtin: boolean; enabled: boolean; credential_ready: boolean;
+  provider?: AgentDraft['provider']; api_url?: string; credential_env?: string; temperature?: number; max_tokens?: number; timeout?: number; preference?: string }
+export interface AgentCatalog { items: SolveAgent[]; default_id: string; solving_available: boolean }
+export interface LibraryDraft { kind: 'strategy' | 'skill'; title: string; category: string; keywords: string; content: string; enabled: boolean }
+export interface LibraryItem extends LibraryDraft { id: string; revision: number; updated_at: string }
 export interface QuestionItem { number: number; label: string; problem: string; page_start: number | null; page_end: number | null;
   status: TaskStatus | 'pending'; attempt: number; task: Task | null }
 export interface QuestionBatch { id: string; session_id: string; original_name: string;
@@ -37,6 +50,16 @@ export class ApiError extends Error {
   constructor(public code: string, public status: number) { super(code); }
 }
 const messages: Record<string, string> = {
+  solve_agents_unavailable: '当前服务未启用真实模型配置，请使用 langgraph 模式启动后端。',
+  solve_agent_not_found: 'Agent 已被删除，请刷新配置。', solve_agent_disabled: '该 Agent 已停用，请选择其他 Agent。',
+  solve_agent_credential_missing: '后端未读取到凭据环境变量。请在启动后端的终端设置变量后重新启动服务。',
+  solve_agent_conflict: '配置已发生变化，请刷新后重试。', solve_agent_capacity: '最多保存 100 个 Agent。',
+  solve_agent_secret_in_config: '请移除配置中的密钥，只填写后端凭据环境变量名。',
+  model_auth_error: '认证失败，请检查后端凭据和模型访问权限。', model_connection_error: '无法连接模型服务，请检查 API 地址与网络。',
+  model_timeout: '连接测试超时，请检查 API 地址或稍后重试。', model_request_rejected: '服务拒绝请求，请检查模型名称和接口类型。',
+  model_rate_limited: '模型服务限流，请稍后重试。', model_service_error: '模型服务暂时异常。',
+  library_unavailable: '自定义知识库暂不可用。', library_capacity: '自定义条目已达到 500 条上限。',
+  library_conflict: '条目已被修改或删除，请刷新列表后重新选择。',
   rate_limit_exceeded: '请求过于频繁，请稍后重试。', session_not_found: '会话已不可用，请新建会话。',
   task_not_found: '任务已不可用，服务可能已重启。', not_ready: '服务暂未就绪，请稍后重试。',
   task_already_terminal: '任务已经结束，无法取消。', checkpoint_incompatible: '检查点与当前版本不兼容。',
@@ -73,6 +96,21 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json();
 }
 export const getHealth = (signal?: AbortSignal) => request<Health>('/health/ready', { signal });
+export const getAgents = (signal?: AbortSignal) => request<AgentCatalog>('/v1/solve-agents', { signal });
+export const saveAgent = (draft: AgentDraft, item?: SolveAgent) => request<SolveAgent>(
+  item ? `/v1/solve-agents/${encodeURIComponent(item.id)}` : '/v1/solve-agents', {
+    method: item ? 'PUT' : 'POST', body: JSON.stringify(item ? { ...draft, revision: item.revision } : draft),
+  });
+export const agentCommand = (item: SolveAgent, command: 'delete' | 'default' | 'test') => request<{ ok?: boolean; error_code?: string }>(
+  `/v1/solve-agents/${encodeURIComponent(item.id)}${command === 'delete' ? '' : `/${command}`}?revision=${item.revision}`,
+  { method: command === 'delete' ? 'DELETE' : 'POST' });
+export const getLibrary = (signal?: AbortSignal) => request<{ items: LibraryItem[] }>('/v1/library', { signal });
+export const saveLibrary = (draft: LibraryDraft, item?: LibraryItem) => request<LibraryItem>(
+  item ? `/v1/library/${encodeURIComponent(item.id)}` : '/v1/library', {
+    method: item ? 'PUT' : 'POST', body: JSON.stringify(item ? { ...draft, revision: item.revision } : draft),
+  });
+export const deleteLibrary = (item: LibraryItem) => request<{ deleted: boolean }>(
+  `/v1/library/${encodeURIComponent(item.id)}?revision=${item.revision}`, { method: 'DELETE' });
 export const createSession = (signal?: AbortSignal) => request<{ id: string }>('/v1/sessions', { method: 'POST', body: '{}', signal });
 export const newIdempotencyKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)),
   byte => byte.toString(16).padStart(2, '0')).join('');
@@ -81,9 +119,9 @@ export const getSessions = (cursor?: string | null, signal?: AbortSignal) => req
   `/v1/sessions?limit=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal });
 export const getSessionTasks = (session: string, cursor?: string | null, signal?: AbortSignal) => request<Page<HistoricalTask>>(
   `/v1/sessions/${encodeURIComponent(session)}/tasks?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal });
-export const submitTask = (session: string, problem: string, key: string, responseStyle?: ResponseStyle, signal?: AbortSignal) => request<Task>(
+export const submitTask = (session: string, problem: string, key: string, responseStyle?: ResponseStyle, signal?: AbortSignal, solveAgentId?: string) => request<Task>(
   `/v1/sessions/${encodeURIComponent(session)}/tasks`, {
-    method: 'POST', body: JSON.stringify({ problem, response_style: responseStyle,
+    method: 'POST', body: JSON.stringify({ problem, response_style: responseStyle, solve_agent_id: solveAgentId,
       metadata: { document_ids: [] } }), headers: { 'Idempotency-Key': key }, signal,
   });
 export function validateFile(file: File): string {
@@ -106,8 +144,8 @@ export function uploadQuestions(session: string, file: File, style: ResponseStyl
   return request<QuestionBatch>(questionBatchPath(session), { method: 'POST', body: form, signal });
 }
 export const cancelQuestionBatch = (session: string, id: string) => request<QuestionBatch>(`${questionBatchPath(session, id)}/cancel`, { method: 'POST' });
-export const startQuestionBatch = (session: string, id: string, prompt: string, style: ResponseStyle) => request<QuestionBatch>(
-  `${questionBatchPath(session, id)}/start`, { method: 'POST', body: JSON.stringify({ prompt, response_style: style }) });
+export const startQuestionBatch = (session: string, id: string, prompt: string, style: ResponseStyle, solveAgentId?: string) => request<QuestionBatch>(
+  `${questionBatchPath(session, id)}/start`, { method: 'POST', body: JSON.stringify({ prompt, response_style: style, solve_agent_id: solveAgentId }) });
 export const retryQuestion = (session: string, id: string, number: number) => request<QuestionBatch>(`${questionBatchPath(session, id)}/questions/${number}/retry`, { method: 'POST' });
 export const cancelTask = (session: string, id: string) => request<Task>(`${taskPath(session, id)}/cancel`, { method: 'POST', body: '{}' });
 export const resumeTask = (session: string, id: string) => request<Task>(`${taskPath(session, id)}/resume`, { method: 'POST' });
@@ -156,9 +194,24 @@ export function taskFromEvent(task: Task, event: TraceEvent): Task {
   const payload = event.payload;
   // Tool/model statuses describe an operation, not the enclosing task.
   const taskEvent = event.event_type.startsWith('task.');
+  const timestamp = (key: string, previous: string | null | undefined) => {
+    if (!taskEvent || !(key in payload)) return previous;
+    const value = payload[key];
+    return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value))) ? value : previous;
+  };
+  const timing = payload.timing;
+  const validTiming = taskEvent && !!timing && typeof timing === 'object' && !Array.isArray(timing)
+    && ['total_ms', 'queue_ms', 'processing_ms', 'answer_delivery_ms'].every(key => {
+      const value = (timing as Record<string, unknown>)[key];
+      return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
+    });
   const status = taskEvent && typeof payload.status === 'string' && Object.hasOwn(statusNames, payload.status)
     ? payload.status as TaskStatus : task.status;
   return { ...task, status,
+    started_at: timestamp('started_at', task.started_at) ?? null,
+    finished_at: timestamp('finished_at', task.finished_at) ?? null,
+    stopped_at: timestamp('stopped_at', task.stopped_at),
+    timing: validTiming ? timing as TaskTiming : task.timing,
     current_stage: event.stage_id === 'system' ? task.current_stage : event.stage_id,
     final_response: taskEvent && typeof payload.final_response === 'string' ? payload.final_response : task.final_response,
     error_code: taskEvent && typeof payload.error_code === 'string' ? payload.error_code : task.error_code,
@@ -206,11 +259,13 @@ export function watchTask(session: string, id: string, callbacks: {
   const run = async () => {
     try {
       await sync();
-      for (let page = 0; page < 10 && !signal.aborted; page++) {
+      while (!signal.aborted) {
+        const previousSequence = sequence;
         const trace = await request<{ events: unknown[]; next_sequence: number }>(
           `${taskPath(session, id)}/trace?after_sequence=${sequence}&limit=500`, { signal });
         trace.events.forEach(raw => deliver(raw, false));
         if (trace.events.length < 500) break;
+        if (sequence <= previousSequence) throw new ApiError('invalid_trace', 502);
       }
       if (!signal.aborted) await sync();
       if (stopIfDone()) return;

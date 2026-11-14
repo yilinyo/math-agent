@@ -37,6 +37,7 @@ class SessionCreate(StrictRequest):
 
 
 class TaskCreate(StrictRequest):
+    solve_agent_id: str | None = Field(default=None, min_length=1, max_length=80)
     problem: str = Field(min_length=1, max_length=24000)
     metadata: dict[str, Any] | None = None
     response_style: Literal["auto", "answer", "brief", "detailed"] | None = None
@@ -54,6 +55,7 @@ class CancelRequest(StrictRequest):
 
 
 class QuestionBatchStart(StrictRequest):
+    solve_agent_id: str | None = Field(default=None, min_length=1, max_length=80)
     prompt: str = Field(default="", max_length=4000)
     response_style: Literal["auto", "answer", "brief", "detailed"] = "auto"
 
@@ -123,6 +125,8 @@ class Task:
     model_calls: dict[str, int] = field(default_factory=dict)
     tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     events: list[TraceEvent] = field(default_factory=list)
+    stopped_at: datetime | None = None
+    answer_delivery_ms: int | None = None
 
 
 class PlatformError(Exception):

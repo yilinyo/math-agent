@@ -12,7 +12,7 @@ from reasoning_agent.custom2.program_checks import check_expression, numeric_equ
 from reasoning_agent.custom2.solution_parser import infer_profile
 from reasoning_agent.custom2.problem_requirements import structure_instruction
 from reasoning_agent.custom2.staged_answer_extractor import (
-    extract_staged_answer, render_staged_response,
+    extract_staged_answer, final_answer_format_failures, render_staged_response,
 )
 from reasoning_agent.custom2.staged_models import StagedAudit, StagedModelFidelity, StagedStrategy
 from reasoning_agent.custom2.recovery import RecoveryAction, route_recovery
@@ -557,12 +557,14 @@ class StagedReasoningRuntime:
             and self._fidelity_claim_is_quoted(candidate, audit.invalid_claim)
             and (audit.evidence or audit.counterexample_or_evidence)
         )
-        accepted = bool(extract_staged_answer(candidate).answer) and not (
+        extraction = extract_staged_answer(candidate)
+        accepted = bool(extraction.answer) and not (
             checks.get("hard_failures") or checks.get("budget_exhausted")
             or confirmed_failure or format_failures
         )
         self._record(
             "final_candidate_checked", accepted=accepted,
+            extraction=extraction.reason,
             candidate_id=hashlib.sha256(candidate.encode("utf-8")).hexdigest(),
             local_verdict=checks.get("verdict", "unknown"),
             budget_exhausted=checks.get("budget_exhausted", False),
@@ -743,7 +745,7 @@ class StagedReasoningRuntime:
             or extract_staged_answer(response).answer is not None
         ):
             return response.strip()
-        return "## 问题分析\n在总时间阀值内未能生成完整解答。\n\n## 详细解题步骤\n已有模型请求未返回可用完整推导。\n\n## 最终答案\n无法确定唯一答案。\n\n## 关键验证点\n- 发生了请求或时间预算耗尽。"
+        return "## 问题分析\n本次求解未获得可用的完整解答。\n\n## 详细解题步骤\n已有模型请求未返回可用完整推导。\n\n## 最终答案\n无法确定唯一答案。\n\n## 关键验证点\n- 请查看各阶段的调用状态，确认是否存在模型请求失败、响应不完整或时间预算耗尽。"
 
     def _final_arbitrate(
         self,
@@ -1843,27 +1845,12 @@ class StagedReasoningRuntime:
         if "all_cases" in profile.obligations and not re.search(r"完备|所有|必要性|充分性|无遗漏", draft):
             ok = False
             findings.append("completeness_obligation_missing")
-        # For quantitative/proof answers, keep the final-answer field
-        # formulaic.  Concept/choice/fill-blank questions are exempt because
-        # their accepted answers can legitimately be Chinese terminology.
-        if profile.answer_mode not in {"choice", "judgment", "fill_blank", "proof"}:
-            final_match = re.search(
-                r"^\s*##\s*最终答案\s*$([\s\S]*?)(?=^\s*##\s+|\Z)",
-                draft,
-                re.MULTILINE,
-            )
-            final_text = final_match.group(1).strip() if final_match else ""
-            if re.search(r"[\u3400-\u9fff]", final_text):
-                ok = False
-                findings.append("non_concept_final_answer_contains_chinese")
-        final_match = re.search(
-            r"^\s*##\s*最终答案\s*$([\s\S]*?)(?=^\s*##\s+|\Z)",
-            draft,
-            re.MULTILINE,
+        format_failures = final_answer_format_failures(
+            draft, profile.answer_mode, timeout=min(0.1, max(0.0, deadline - time.monotonic())),
         )
-        if final_match and len(re.findall(r"\\boxed\s*\{", final_match.group(1))) > 1:
+        if format_failures:
             ok = False
-            findings.append("multiple_final_candidates")
+            findings.extend(format_failures)
         budget_exhausted = budget_exhausted or time.monotonic() >= deadline
         verdict = "fail" if hard_failures else (
             "pass" if not budget_exhausted and program_results and all(r["verdict"] == "pass" for r in program_results)

@@ -74,11 +74,12 @@ class QuestionCatalog:
                 item["status"], json.dumps(item, ensure_ascii=False), item["id"], item["session_id"]))
 
     @synchronized
-    def activate(self, session_id, identifier, instruction, style):
+    def activate(self, session_id, identifier, instruction, style, solve_agent_id=None, freeze=None):
         with self.connection:
             item = self.get(session_id, identifier)
             if item["status"] != "ready":
-                if item.get("instruction") == instruction and item.get("start_style") == style:
+                if (item.get("instruction") == instruction and item.get("start_style") == style
+                        and item.get("solve_agent_request") == solve_agent_id):
                     return item
                 raise PlatformError("question_not_ready" if item["status"] == "parsing" else "question_start_conflict", 409)
             if self.connection.execute("SELECT count(*) FROM batches WHERE status IN ('parsing','solving')").fetchone()[0] >= 16:
@@ -86,6 +87,9 @@ class QuestionCatalog:
             if self.connection.execute("SELECT count(*) FROM batches WHERE session_id=? AND status IN ('parsing','solving')", (session_id,)).fetchone()[0]:
                 raise PlatformError("question_batch_active", 409)
             item.update(status="solving", instruction=instruction, start_style=style)
+            if freeze:
+                item["solve_agent"] = freeze(solve_agent_id)
+                item["solve_agent_request"] = solve_agent_id
             self.connection.execute("UPDATE batches SET status=?,data=? WHERE id=? AND session_id=?", (
                 item["status"], json.dumps(item, ensure_ascii=False), identifier, session_id))
             return item
@@ -269,6 +273,10 @@ class QuestionBatchService:
                         RESPONSE_STYLE_KEY: item.get("start_style", item["options"]["response_style"])}
             if item.get("instruction"):
                 metadata[INSTRUCTION_KEY] = item["instruction"]
+            if item.get("solve_agent"):
+                from agent_platform.solve_agents import SNAPSHOT_KEY, REQUEST_KEY
+                metadata[SNAPSHOT_KEY] = item["solve_agent"]
+                metadata[REQUEST_KEY] = item.get("solve_agent_request")
             task = self.tasks.submit(session, question["problem"], metadata,
                                      f"question:{identifier}:{question['number']}:{question['attempt']}")
             question["task_id"] = task.id
@@ -277,12 +285,16 @@ class QuestionBatchService:
         item["status"] = "completed"
         self.catalog.save(item)
 
-    def begin(self, session_id, identifier, prompt, style):
+    def begin(self, session_id, identifier, prompt, style, solve_agent_id=None):
         if not self.accepting:
             raise PlatformError("question_service_unavailable", 503)
         if not isinstance(prompt, str) or len(prompt) > 4000 or style not in RESPONSE_STYLES:
             raise PlatformError("invalid_request", 400)
-        return self.catalog.activate(session_id, identifier, sanitize_text(prompt.strip()), style)
+        agents = getattr(self.tasks, "solve_agents", None)
+        if solve_agent_id is not None and agents is None:
+            raise PlatformError("solve_agents_unavailable", 503)
+        return self.catalog.activate(session_id, identifier, sanitize_text(prompt.strip()), style,
+                                     solve_agent_id, agents.freeze if agents else None)
 
     def cancel(self, session_id, identifier):
         item = self.catalog.get(session_id, identifier)
@@ -333,6 +345,8 @@ class QuestionBatchService:
         result["question_count"] = len(item["questions"])
         result["response_style"] = item.get("start_style", item["options"]["response_style"])
         result["user_instruction"] = item.get("instruction", "")
+        from agent_platform.solve_agents import public_agent
+        result["solve_agent"] = public_agent(item.get("solve_agent"))
         questions = []
         for question in item["questions"]:
             task = self.tasks.store.get_task(item["session_id"], question["task_id"]) if question["task_id"] else None

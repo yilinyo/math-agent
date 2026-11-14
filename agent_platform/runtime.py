@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 from agent_platform.models import Message
 from agent_platform.safety import sanitize_text
 from agent_platform.observability import log_runtime_event, log_tool_result
+from agent_platform.presentation.trace import public_tool_result
 
 
 STAGES = ("profile", "retrieve", "plan", "solve", "tool", "verify", "repair", "finalize")
@@ -65,6 +66,9 @@ class RuntimeContext:
         self.tool_calls[call_id] = entry
         if event_type == "tool.committed":
             log_tool_result(self.task_id, entry["stage_id"], entry["tool_name"], call_id, entry.get("result"))
+            self.record(entry["stage_id"], "tool.result", public_tool_result(
+                entry["tool_name"], call_id, entry.get("result") or {},
+            ))
 
     def progress(self, stage: str, *, completed: bool = False,
                  checkpoint: dict[str, Any] | None = None) -> None:
@@ -89,6 +93,9 @@ class RuntimeContext:
             entry = self.tool_calls.get(payload.get("call_id"), {})
             log_tool_result(self.task_id, stage, payload.get("name"), payload.get("call_id"),
                             entry.get("result"), replayed=True)
+            self.record(stage, "tool.result", public_tool_result(
+                payload.get("name"), payload.get("call_id"), entry.get("result") or {},
+            ))
 
     def save_response(self, response: str) -> None:
         if response.strip():

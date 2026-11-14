@@ -23,6 +23,8 @@ class CandidateCheckpoint(BaseModel):
 
 
 class GraphState(TypedDict, total=False):
+    solve_agent_hash: str
+    custom_material: str
     schema_version: str
     task_id: str
     session_id: str
@@ -56,6 +58,10 @@ class GraphState(TypedDict, total=False):
 
 class GraphCheckpoint(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    solve_agent_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    custom_material: str = Field(default="", max_length=12000)
 
     schema_version: str
     task_id: str

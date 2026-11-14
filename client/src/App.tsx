@@ -1,21 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, Check, ChevronRight, Circle, Copy, FileJson, LoaderCircle, Menu,
-  MessageSquare, PanelRightOpen, Plus, RotateCcw, Sigma, SlidersHorizontal, Square, X,
+  ArrowUp, BookOpen, Check, ChevronRight, Circle, Copy, FileJson, LoaderCircle, Menu,
+  MessageSquare, PanelRightOpen, Plus, RotateCcw, Sigma, SlidersHorizontal, Square, X, Cpu,
 } from 'lucide-react';
 import {
   ApiError, cancelTask, createSession, errorMessage, getHealth, getTask, getSessions, getSessionTasks, newIdempotencyKey, resumeTask,
   stageNames, statusNames, STAGES, submitTask, startQuestionBatch, taskPath, terminal, watchTask,
-  type Health, type ResponseStyle, type Task, type TraceEvent,
+  getAgents, type AgentCatalog, type Health, type ResponseStyle, type Task,
 } from './api';
 import { mergeTasks, readHistory, readSelected, saveHistory, saveSelected, type SessionRef } from './history';
 import MathMarkdown from './MathMarkdown';
 import QuestionBatches, { type QuestionState } from './QuestionBatches';
+import TaskOutput from './TaskOutput';
+import LibraryPanel from './LibraryPanel';
+import AgentsPanel from './AgentsPanel';
+import { answerFromEvent, executionSummary, type LiveTaskView } from './taskStream';
+import { timelineFromEvent } from './timelineState';
+import { formatDuration, taskTimings } from './timing';
 
-interface RecordView { task?: Task; events: TraceEvent[]; started: string[]; completed: string[]; error?: string }
+interface RecordView extends LiveTaskView { started: string[]; completed: string[]; error?: string }
 const blank = (): RecordView => ({ events: [], started: [], completed: [] });
 const keyFor = (session: string, id: string) => `${session}/${id}`;
-const timeLabel = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionRef[]>([]);
@@ -41,9 +46,15 @@ export default function App() {
   const [connection, setConnection] = useState('未连接');
   const [watchVersion, setWatchVersion] = useState(0);
   const [drawer, setDrawer] = useState<'sessions' | 'progress' | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [agents, setAgents] = useState<AgentCatalog>();
+  const [agentId, setAgentId] = useState('');
+  const [agentsError, setAgentsError] = useState('');
+  const previousDefaultAgent = useRef('');
   const [copied, setCopied] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
-  const pending = useRef<{ session: string; problem: string; style?: ResponseStyle; key: string } | null>(null);
+  const pending = useRef<{ session: string; problem: string; style?: ResponseStyle; agentId: string; key: string } | null>(null);
   const olderRequest = useRef<AbortController | null>(null);
   const sendingRef = useRef(false);
   const scrollArea = useRef<HTMLDivElement>(null);
@@ -72,8 +83,24 @@ export default function App() {
   const fileUploading = questionState.uploading;
   const needsRestart = !!health && !supportsPresentation;
   const canSend = (attachment ? supportsQuestions && attachment.status === 'ready' : !!draft.trim()) && draft.length <= draftLimit && !sending && !active && !loading && !questionBusy && !fileUploading && ready && !historyBusy
+    && (!health?.solve_agents || (!!agents && !agentsError && !!agents.items.find(item => item.id === agentId && item.enabled && item.credential_ready)))
     && !historyError && !taskHistoryBusy && !taskHistoryError
     && (!selected || !supportsHistory || currentSession?.tasksLoaded === true);
+
+  const updateAgents = useCallback((value: AgentCatalog) => {
+    setAgents(value); setAgentsError('');
+    const oldDefault = previousDefaultAgent.current;
+    previousDefaultAgent.current = value.default_id;
+    setAgentId(previous => previous !== oldDefault && value.items.some(item => item.id === previous && item.enabled) ? previous : value.default_id);
+  }, []);
+  useEffect(() => {
+    if (!health?.solve_agents) return;
+    const controller = new AbortController();
+    void getAgents(controller.signal).then(updateAgents).catch(failure => {
+      if (!controller.signal.aborted) setAgentsError(errorMessage(failure));
+    });
+    return () => controller.abort();
+  }, [health?.solve_agents, updateAgents]);
 
   const updateTask = useCallback((task: Task) => {
     setRecords(previous => {
@@ -195,7 +222,10 @@ export default function App() {
           ? [...before.completed, event.stage_id] : before.completed;
         const started = event.event_type === 'stage.started' && !before.started.includes(event.stage_id)
           ? [...before.started, event.stage_id] : before.started;
-        return { ...previous, [key]: { ...before, started, completed, events: [...before.events, event].slice(-120) } };
+        return { ...previous, [key]: { ...before, started, completed,
+          stream: answerFromEvent(before.stream, event),
+          timeline: timelineFromEvent(before.timeline, event),
+          events: event.event_type === 'answer.delta' ? before.events : [...before.events, event].slice(-120) } };
       }),
       connection: setConnection,
       error: failure => setRecords(previous => ({ ...previous,
@@ -263,7 +293,7 @@ export default function App() {
     const style = supportsPresentation ? responseStyle : undefined;
     try {
       if (selected && attachment) {
-        await startQuestionBatch(selected, attachment.id, problem, responseStyle);
+        await startQuestionBatch(selected, attachment.id, problem, responseStyle, agentId || undefined);
         setQuestionState(previous => ({ ...previous, busy: true, attachment: null, batch: previous.batch ? { ...previous.batch, status: 'solving', user_instruction: problem } : null }));
         setQuestionVersion(value => value + 1); setDraft('');
         return;
@@ -274,10 +304,10 @@ export default function App() {
         setSessions(previous => [{ id: session!, title: problem.slice(0, 40), tasks: [], tasksLoaded: true, taskCount: 0 }, ...previous]);
         setSelected(session);
       }
-      if (!pending.current || pending.current.session !== session || pending.current.problem !== problem || pending.current.style !== style) {
-        pending.current = { session, problem, style, key: newIdempotencyKey() };
+      if (!pending.current || pending.current.session !== session || pending.current.problem !== problem || pending.current.style !== style || pending.current.agentId !== agentId) {
+        pending.current = { session, problem, style, agentId, key: newIdempotencyKey() };
       }
-      const task = await submitTask(session, problem, pending.current.key, style);
+      const task = await submitTask(session, problem, pending.current.key, style, undefined, agentId || undefined);
       updateTask(task);
       setSessions(previous => {
         const item = previous.find(value => value.id === session)!;
@@ -313,12 +343,13 @@ export default function App() {
   }
   const isDemo = health?.runtime_mode.includes('fake');
   const isReal = health?.runtime_mode === 'langgraph_staged';
-  const elapsed = latest?.started_at ? Math.max(0, ((latest.finished_at ? Date.parse(latest.finished_at) : now)
-    - Date.parse(latest.started_at)) / 1000) : 0;
+  const elapsed = latest ? taskTimings(latest, now).total_ms : null;
 
   const sessionSidebar = <>
     <div className="brand"><span className="brand-mark"><Sigma size={22} /></span><span>MathS-Agent<small>数学推理工作台</small></span></div>
     <button className="new-session" onClick={() => selectSession(null)} disabled={sending || historyBusy || fileUploading}><Plus size={18} />新建会话</button>
+    {health?.custom_library && <button className="sidebar-tool" onClick={() => { setDrawer(null); setLibraryOpen(true); }}><BookOpen size={16} />策略与 Skills</button>}
+    {health?.solve_agents && <button className="sidebar-tool" onClick={() => { setDrawer(null); setAgentsOpen(true); }}><Cpu size={16} />模型与 Agents</button>}
     <div className="nav-heading">会话{supportsHistory && <button className="icon-button" title="刷新会话" aria-label="刷新会话"
       disabled={historyBusy || sending} onClick={() => setHistoryVersion(value => value + 1)}><RotateCcw size={14} /></button>}</div>
     {historyBusy && <p className="muted" role="status">载入会话中</p>}
@@ -340,7 +371,7 @@ export default function App() {
     <div className="panel-heading"><h2>执行进度</h2><span className={`connection ${connection === '重连中' ? 'warning' : ''}`}>{connection}</span></div>
     {latest ? <>
       <div className="task-summary"><span className={`status status-${latest.status}`} data-testid="task-status">{statusNames[latest.status]}</span>
-        <span className="duration">{timeLabel(elapsed)}</span></div>
+        <span className="duration" title="总耗时，包含排队与暂停">{formatDuration(elapsed)}</span></div>
       {latest.status === 'queued' && <p className="muted">队列位置 {latest.queue_position}</p>}
       <ol className="stage-list" aria-label="执行阶段">
         {STAGES.map(stage => {
@@ -362,8 +393,11 @@ export default function App() {
           href={`/trace-viewer#session=${latest.session_id}&task=${latest.id}`}><FileJson size={15} />查看 Trace<ChevronRight size={14} /></a>
       </div>
       <div className="event-heading"><h3>最近事件</h3><span>{latestRecord?.events.length || 0}</span></div>
-      <ul className="event-list">{latestRecord?.events.slice(-6).reverse().map(event => <li key={event.sequence}>
-        <span>{stageNames[event.stage_id] || '任务事件'}</span><code>{event.event_type}</code>
+      <ul className="event-list">{latestRecord?.events.flatMap(event => {
+        const summary = executionSummary(event);
+        return summary ? [{ event, summary }] : [];
+      }).slice(-6).reverse().map(({ event, summary }) => <li key={event.sequence}>
+        <span>{summary}</span><code title={event.event_type}>{new Date(event.created_at).toLocaleTimeString('zh-CN', { hour12: false })}</code>
       </li>)}</ul>
       <div className="task-id">{latest.id}</div>
     </> : <div className="panel-empty"><Circle size={18} /><span>{loading ? '载入任务中' : '暂无任务'}</span></div>}
@@ -380,6 +414,7 @@ export default function App() {
           <span />{!health ? '连接服务中' : !ready ? '服务未就绪' : isDemo ? '演示运行时' : isReal ? '真实运行时' : health.runtime_mode}
         </div>
         <button className="icon-button mobile-progress" title="执行进度" aria-label="执行进度" onClick={() => setDrawer('progress')}><PanelRightOpen size={20} /></button>
+        {health?.custom_library && <button className="icon-button library-open-mobile" title="自定义知识" aria-label="自定义知识" onClick={() => { setDrawer(null); setLibraryOpen(true); }}><BookOpen size={19} /></button>}
       </header>
       <div className="workspace-body">
         <main className="conversation">
@@ -388,7 +423,7 @@ export default function App() {
           }}>
             <QuestionBatches session={selected} enabled={supportsQuestions}
               disabled={!ready || sending || active || loading || historyBusy || taskHistoryBusy || !!historyError || !!taskHistoryError}
-              style={responseStyle} refreshVersion={questionVersion} uploadTarget={questionUploadTarget}
+              style={responseStyle} refreshVersion={questionVersion} uploadTarget={questionUploadTarget} liveRecords={records} now={now}
               onSessionCreated={questionSession} onStateChange={setQuestionState} />
             {supportsHistory && <div className="history-controls">
               {taskHistoryBusy && <span className="muted" role="status">载入历史中</span>}
@@ -404,17 +439,10 @@ export default function App() {
                   <div className="user-message"><span className="message-label">问题</span><div className="user-body"><MathMarkdown content={reference.problem} /></div></div>
                   <div className="assistant-message"><div className="message-label"><Sigma size={14} />MathS-Agent
                     <span className="answer-kind">{task?.final_response ? task.status === 'succeeded' ? '最终答案' : '保留候选' : task ? statusNames[task.status] : '载入中'}</span></div>
-                    {task?.final_response ? <div className="answer" data-testid="answer"><MathMarkdown content={task.final_response} />
+                    <TaskOutput task={task} view={record} error={record?.error} now={now} />
+                    {task?.final_response &&
                       <div className="answer-toolbar"><span>{statusNames[task.status]}</span><button className="icon-button" title="复制答案" aria-label="复制答案" onClick={() => void copy(task)}>
-                        {copied === task.id ? <Check size={16} /> : <Copy size={16} />}</button></div></div>
-                      : record?.error ? <p className="message-error" role="alert">{record.error}</p>
-                        : task && !terminal(task.status) ? <div className="waiting" role="status"><LoaderCircle size={17} className="spin" />
-                          <span>{task.status === 'queued' ? '等待执行' : task.status === 'cancelling' ? '正在取消' : stageNames[task.current_stage || 'system'] || '正在执行'}</span></div>
-                          : task?.status === 'cancelled' ? <p className="muted">任务已取消。</p>
-                            : task?.status === 'failed' ? <p className="message-error">{errorMessage(new ApiError(task.error_code || 'failed', 0))}</p>
-                              : task?.status === 'interrupted' ? <p className="muted">任务已中断。</p>
-                                : task?.status === 'succeeded' ? <p className="message-error">任务已完成，但未收到最终答案。</p>
-                                  : <div className="waiting"><LoaderCircle size={16} className="spin" /><span>载入中</span></div>}
+                        {copied === task.id ? <Check size={16} /> : <Copy size={16} />}</button></div>}
                   </div>
                 </section>;
               })}
@@ -426,7 +454,18 @@ export default function App() {
               {latestRecord?.error && <button className="icon-button" title="重连任务" aria-label="重连任务" onClick={() => setWatchVersion(value => value + 1)}><RotateCcw size={16} /></button>}
               {error && <button className="icon-button" title="关闭提示" aria-label="关闭提示" onClick={() => setError('')}><X size={16} /></button>}
             </div>}
-            <div className="composer-options"><label><SlidersHorizontal size={14} />解答方式
+            {agentsError && <p className="message-error" role="alert">{agentsError}<button className="icon-button" title="刷新模型配置" aria-label="刷新模型配置" onClick={() => setAgentsOpen(true)}><RotateCcw size={14} /></button></p>}
+            <div className="composer-options">
+              {health?.solve_agents && <label><Cpu size={14} />Solve Agent
+                <select aria-label="Solve Agent" value={agentId} disabled={sending || active || questionBusy || fileUploading || !agents}
+                  onChange={event => setAgentId(event.target.value)}>
+                  {!agents && <option value="">正在载入</option>}
+                  {agents?.items.filter(item => item.enabled).map(item => <option key={item.id} value={item.id} disabled={!item.credential_ready || (!agents.solving_available && !item.builtin)}>
+                    {item.name}{item.id === agents.default_id ? '（默认）' : ''}{!item.credential_ready ? '（缺少凭据）' : ''}
+                  </option>)}
+                </select>
+              </label>}
+              <label><SlidersHorizontal size={14} />解答方式
               <select aria-label="解答方式" value={responseStyle} disabled={sending || active || questionBusy || fileUploading || !supportsPresentation}
                 onChange={event => setResponseStyle(event.target.value as ResponseStyle)}>
                 <option value="auto">按问题要求</option><option value="answer">仅答案</option>
@@ -453,6 +492,8 @@ export default function App() {
         <aside className="progress-panel">{progressPanel}</aside>
       </div>
     </div>
+    {libraryOpen && <LibraryPanel onClose={() => setLibraryOpen(false)} />}
+    {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} onChange={updateAgents} />}
     {drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)}>
       <div ref={drawerElement} className={`drawer drawer-${drawer}`} role="dialog" aria-modal="true" aria-label={drawer === 'sessions' ? '会话列表' : '执行进度'}
         onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') setDrawer(null); }}>

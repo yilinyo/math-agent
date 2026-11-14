@@ -23,7 +23,7 @@ def encode(value):
 def decode_task(raw):
     data = json.loads(raw)
     data["status"] = TaskStatus(data["status"])
-    for field in ("accepted_at", "started_at", "deadline_at", "finished_at", "stage_started_at", "lease_until"):
+    for field in ("accepted_at", "started_at", "deadline_at", "finished_at", "stage_started_at", "lease_until", "stopped_at"):
         data[field] = datetime.fromisoformat(data[field]) if data.get(field) else None
     data["memory"] = tuple(Message(**message) for message in data["memory"])
     data["events"] = []

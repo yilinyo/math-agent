@@ -210,6 +210,25 @@ it('does not open SSE for an already completed task', async () => {
   expect(callbacks.event).toHaveBeenCalledTimes(1);
   stop();
 });
+it('replays all pages of a long completed timeline before stopping', async () => {
+  const events = Array.from({ length: 5501 }, (_, index) => ({ ...event, sequence: index + 1 }));
+  const fetcher = vi.fn(async (path: string) => {
+    if (path.includes('/trace?')) {
+      const after = Number(new URL(path, 'http://localhost').searchParams.get('after_sequence'));
+      return new Response(JSON.stringify({ events: events.slice(after, after + 500) }));
+    }
+    return new Response(JSON.stringify({ ...task, status: 'succeeded' }));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const callbacks = { task: vi.fn(), event: vi.fn(), connection: vi.fn(), error: vi.fn() };
+  const stop = watchTask(session, id, callbacks);
+  try {
+    await vi.waitFor(() => expect(callbacks.connection).toHaveBeenCalledWith('已结束'));
+    expect(callbacks.event).toHaveBeenCalledTimes(5501);
+    expect(callbacks.error).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.some(([path]) => path.includes('/events?'))).toBe(false);
+  } finally { stop(); }
+});
 it('does not let interrupted historical events stop an already resumed task', async () => {
   const interrupted = { ...event, event_type: 'task.interrupted', payload: { status: 'interrupted' } };
   const completed = { ...event, sequence: 2, event_type: 'task.succeeded', payload: { status: 'succeeded', final_response: 'Resumed fixture.' } };

@@ -86,6 +86,24 @@ def test_real_stage_adapter_uses_injected_client_and_serializable_checkpoints(pr
     json.dumps(checkpoints, allow_nan=False)
 
 
+@pytest.mark.parametrize("decimal,accepted", [("1.6", True), ("1.7", False)])
+def test_final_acceptance_preserves_equivalent_answers_and_rejects_conflicts(decimal, accepted):
+    client = client_for_pass()
+    client.responses[2] = draft(
+        r"适用条件：$a,b\geq0$ 且 $a+b>0$。" "\n"
+        r"指标值：$\boxed{\dfrac{8}{5}}$（即 $\boxed{" + decimal + r"}$）。",
+        proof=True,
+    )
+    runtime = LangGraphRuntime(client, config(custom2_max_repairs=0))
+    ctx, _, checkpoints = context()
+    result = asyncio.run(runtime.run(ctx))
+    if accepted:
+        assert result.final_response == r"\boxed{\dfrac{8}{5}}" "\n" r"\boxed{1.6}"
+    else:
+        assert result.final_response == "无法确定唯一答案"
+    assert checkpoints[-1]["next_stage"] == "terminal"
+
+
 def test_resume_at_every_completed_node_does_not_replay_model_calls():
     runtime = LangGraphRuntime(client_for_pass(), config())
     ctx, _, checkpoints = context()

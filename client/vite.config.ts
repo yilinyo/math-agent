@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       strictPort: true,
-      proxy: Object.fromEntries(['/v1', '/health', '/trace-viewer', '/docs', '/openapi.json']
+      proxy: Object.fromEntries(['/v1', '/health', '/trace-viewer', '/trace-assets', '/docs', '/openapi.json']
         .map(path => [path, { target: backend, changeOrigin: true }])),
     },
   };

@@ -2,22 +2,28 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Download, FileText, FileUp, LoaderCircle, RotateCcw, Square, X } from 'lucide-react';
 import { ApiError, cancelQuestionBatch, cancelTask, createSession, errorMessage, getQuestionBatch, getQuestionBatches,
-  resumeTask, retryQuestion, stageNames, statusNames, terminal, uploadQuestions, validateFile, type QuestionBatch, type ResponseStyle, type Task } from './api';
+  resumeTask, retryQuestion, statusNames, terminal, uploadQuestions, validateFile, type QuestionBatch, type ResponseStyle, type Task } from './api';
 import MathMarkdown from './MathMarkdown';
+import TaskOutput from './TaskOutput';
+import { type LiveTaskView } from './taskStream';
+import { formatDuration, taskTimings } from './timing';
 
 export interface QuestionState { session: string | null; uploading: boolean; busy: boolean; count: number; task?: Task | null; batch?: QuestionBatch | null; attachment?: QuestionBatch | null }
 interface Props { session: string | null; enabled: boolean; disabled: boolean;
-  style: ResponseStyle; refreshVersion?: number; uploadTarget: HTMLElement | null;
+  style: ResponseStyle; refreshVersion?: number; uploadTarget: HTMLElement | null; liveRecords?: Record<string, LiveTaskView>; now?: number;
   onSessionCreated: (id: string) => void; onStateChange: (state: QuestionState) => void }
 const names = { parsing: '正在拆题', ready: '待提交', solving: '逐题解答中', completed: '处理结束', failed: '处理失败', cancelled: '已取消' };
 
 export function batchMarkdown(batch: QuestionBatch): string {
-  return `# ${batch.original_name}\n\n状态：${names[batch.status]}\n\n` + (batch.user_instruction ? `## 解题要求\n\n${batch.user_instruction}\n\n` : '') + (batch.questions || []).map(question =>
-    `## 第 ${question.number} 题\n\n${question.problem}\n\n### 解答\n\n` +
-    (question.task?.final_response || `状态：${question.status === 'pending' ? '待执行' : statusNames[question.status]}`) + '\n\n').join('');
+  return `# ${batch.original_name}\n\n状态：${names[batch.status]}\n\n` + (batch.user_instruction ? `## 解题要求\n\n${batch.user_instruction}\n\n` : '') + (batch.questions || []).map(question => {
+    const timing = question.task && terminal(question.task.status) ? taskTimings(question.task, Date.now()) : null;
+    return `## 第 ${question.number} 题\n\n${question.problem}\n\n### 解答\n\n` +
+      (question.task?.final_response || `状态：${question.status === 'pending' ? '待执行' : statusNames[question.status]}`) +
+      (timing?.total_ms != null ? `\n\n总耗时：${formatDuration(timing.total_ms)}` : '') + '\n\n';
+  }).join('');
 }
 
-export default function QuestionBatches({ session, enabled, disabled, style, refreshVersion, uploadTarget, onSessionCreated, onStateChange }: Props) {
+export default function QuestionBatches({ session, enabled, disabled, style, refreshVersion, uploadTarget, liveRecords, now, onSessionCreated, onStateChange }: Props) {
   const [batches, setBatches] = useState<QuestionBatch[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [attachmentId, setAttachmentId] = useState<string | null>(null);
@@ -164,9 +170,9 @@ export default function QuestionBatches({ session, enabled, disabled, style, ref
           {['failed', 'cancelled'].includes(question.status) && detail.status !== 'cancelled' && question.attempt < 2 && <button className="icon-button" title="重新解答本题" aria-label={`重试第 ${question.number} 题`} disabled={mutating}
             onClick={() => void mutate(() => retryQuestion(session!, detail.id, question.number))}><RotateCcw size={14} /></button>}</div>
         <details className="question-stem" open><summary>题目</summary><MathMarkdown content={question.problem} /></details>
-        {question.task?.final_response ? <div className="answer" data-testid="question-answer"><MathMarkdown content={question.task.final_response} /></div>
-          : question.task?.error_code ? <p className="message-error">{errorMessage(new ApiError(question.task.error_code, 0))}</p>
-            : question.task && !terminal(question.task.status) ? <div className="waiting"><LoaderCircle size={15} className="spin" />{stageNames[question.task.current_stage || 'system'] || '等待执行'}</div> : null}
+        {question.task && <TaskOutput
+          task={terminal(question.task.status) ? question.task : liveRecords?.[`${session}/${question.task.id}`]?.task || question.task}
+          view={liveRecords?.[`${session}/${question.task.id}`]} testId="question-answer" now={now} />}
         {question.task && <a className="trace-link" href={`/trace-viewer#session=${session}&task=${question.task.id}`} target="_blank" rel="noopener noreferrer">查看 Trace</a>}
       </section>)}
     </div>}

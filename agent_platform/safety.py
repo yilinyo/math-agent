@@ -18,7 +18,7 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:api[_ -]?key|password|secret|access[_ -]?token)\s*[:=]\s*[^\s,;]+"),
     re.compile(r"(?i)\b(?:postgres(?:ql)?|redis|https?)://[^\s/@]+:[^\s/@]+@"),
 )
-_LOCAL_PATH = re.compile(r"[A-Za-z]:[\\/][^\s<>\"']+")
+_LOCAL_PATH = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s<>\"']+")
 
 
 def private_key(key: str) -> bool:

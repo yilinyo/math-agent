@@ -24,6 +24,18 @@ def test_model_and_tool_event_fields_are_visible(capsys):
     assert "[工具回退开始]" in output
 
 
+def test_model_failure_logs_structured_diagnostics_only(capsys):
+    log_runtime_event("task", "solve", "model.failed", {
+        "error_type": "ChatCompletionError", "error_code": "model_rate_limited",
+        "http_status": 429, "attempts": 1, "duration_ms": 150,
+        "message": "private prompt", "response_body": "private response",
+    })
+    output = capsys.readouterr().out
+    assert "错误码=model_rate_limited" in output and "HTTP状态=429" in output
+    assert "尝试次数=1" in output and "耗时毫秒=150" in output
+    assert "private" not in output
+
+
 @pytest.mark.parametrize("persist", [False, True])
 def test_committed_and_replayed_result_logged_once_without_new_execution(persist, capsys):
     local = Mock(invoke=AsyncMock(return_value={"status": "succeeded", "value": {
@@ -66,3 +78,21 @@ def test_tool_failure_and_result_truncation_are_explicit(capsys):
     output = capsys.readouterr().out
     assert '"error_code": "timeout"' in output
     assert '"truncated": true' in output
+
+
+def test_final_acceptance_logs_reasons_without_private_payloads(capsys):
+    log_runtime_event("task", "finalize", "reasoning.event", {
+        "operation": "final_candidate_checked", "accepted": False,
+        "format_failures": ["multiple_final_candidates"], "hard_failure_count": 0,
+        "budget_exhausted": False, "extraction": "ok", "prompt": "PRIVATE_PROMPT",
+        "raw_response": "PRIVATE_RESPONSE",
+    })
+    log_runtime_event("task", "verify", "stage.outcome", {
+        "status": "needs_review", "next_stage": "repair", "routing_reason": "audit_requires_repair"})
+    output = capsys.readouterr().out
+    assert "最终验收通过=否" in output
+    assert "多个答案冲突或尚无法验证等价" in output
+    assert "计算矛盾数=0" in output
+    assert "流转依据=审查发现问题" in output
+    assert "下一步=repair（定向修复）" in output
+    assert "PRIVATE" not in output

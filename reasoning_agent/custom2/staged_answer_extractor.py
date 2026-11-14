@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 
 from reasoning_agent.custom.parsers.answer_normalizer import normalize_objective_answer
+from reasoning_agent.custom2.program_checks import equivalent_numeric_answers
 
 
 _SECTION_RE = re.compile(
@@ -20,6 +21,26 @@ _PLACEHOLDERS = (
 class StagedAnswerExtraction:
     answer: str | None
     reason: str
+
+
+def final_answer_format_failures(response: str, answer_mode: str, *, timeout: float = 0.1) -> list[str]:
+    match = _SECTION_RE.search(response)
+    if not match:
+        return []
+    section = match.group(1).strip()
+    fragments = _boxed_fragments(section)
+    contents = [_boxed_content(fragment).strip() for fragment in fragments]
+    failures = []
+    if answer_mode not in {"choice", "judgment", "fill_blank", "proof"}:
+        # Explanations outside answer boxes are part of the solution, not the
+        # quantitative answer field.
+        if re.search(r"[\u3400-\u9fff]", "\n".join(contents) if contents else section):
+            failures.append("non_concept_final_answer_contains_chinese")
+    if len(re.findall(r"\\boxed\s*\{", section)) > 1:
+        distinct = list(dict.fromkeys(contents))
+        if not distinct or (len(distinct) > 1 and not equivalent_numeric_answers(distinct, timeout=timeout)):
+            failures.append("multiple_final_candidates")
+    return failures
 
 
 def extract_staged_answer(response: str) -> StagedAnswerExtraction:

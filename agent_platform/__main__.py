@@ -20,9 +20,15 @@ def main() -> None:
     parser.add_argument("--embedding-model-dir", help="Offline Qwen3-Embedding-0.6B weights")
     parser.add_argument("--embedding-threads", type=int, default=4, help="CPU threads for local embeddings")
     parser.add_argument("--question-dir", help="Private durable question-attachment directory (single owner)")
+    parser.add_argument("--library-dir", default="local_state/custom_library",
+                        help="Local custom strategies and skills directory")
+    parser.add_argument("--agents-dir", default="local_state/solve_agents",
+                        help="Local nonsecret Solve Agent configuration directory")
     args = parser.parse_args()
     from agent_platform.app import create_app
+    from agent_platform.custom_library import CustomLibrary
 
+    library = CustomLibrary(args.library_dir)
     runtime, store, documents = None, None, None
     if args.rag_dir:
         if not args.embedding_model_dir:
@@ -50,7 +56,8 @@ def main() -> None:
             from agent_platform.tools.mcp_client import SdkMCPClient
             mcp = SdkMCPClient()
         runtime = build_runtime(client=client, client_identity=args.client_identity,
-                                documents=documents, mcp=mcp, function_calling=args.function_calling)
+                                documents=documents, mcp=mcp, function_calling=args.function_calling,
+                                library=library)
     if args.redis_url_env:
         from redis import Redis
         from agent_platform.redis_store import RedisTaskStore
@@ -61,7 +68,18 @@ def main() -> None:
         store = RedisTaskStore(Redis.from_url(url, decode_responses=True,
                                             socket_timeout=1, socket_connect_timeout=1),
                                namespace=args.namespace)
-    uvicorn.run(create_app(runtime=runtime, store=store, documents=documents, question_dir=args.question_dir), host=args.host, port=args.port,
+    from agent_platform.bootstrap import build_solve_client
+    from agent_platform.solve_agents import SolveAgents
+
+    def test_agent(snapshot):
+        model_client = build_solve_client(snapshot) if snapshot.get("config") else client
+        model_client.chat(messages=[{"role": "user", "content": "Reply OK."}], max_tokens=16,
+                          request_timeout=5, thinking_mode=False)
+
+    agents = SolveAgents(args.agents_dir, model=getattr(runtime.client, "model", "default") if runtime else "Fake demo",
+                         available=runtime is not None, tester=test_agent if runtime else None)
+    uvicorn.run(create_app(runtime=runtime, store=store, documents=documents,
+                          question_dir=args.question_dir, library=library, solve_agents=agents), host=args.host, port=args.port,
                 access_log=False)
 
 
