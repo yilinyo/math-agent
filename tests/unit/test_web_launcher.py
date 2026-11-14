@@ -3,9 +3,14 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import socket
 import subprocess
 import sys
+import time
+import venv
 from unittest.mock import Mock
+from urllib.request import urlopen
 
 import pytest
 
@@ -17,6 +22,7 @@ spec.loader.exec_module(launcher)
 
 
 @pytest.mark.parametrize("shell", ["bash", "sh"])
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable shell fixtures; Windows entry is tested separately")
 def test_conda_hooks_can_read_unset_prompt(shell, tmp_path, monkeypatch):
     conda = tmp_path / "conda"
     conda.write_text(
@@ -186,3 +192,136 @@ def test_foreground_reports_unexpected_backend_exit(tmp_path, capsys):
     with pytest.raises(launcher.LauncherError, match="退出码 7"):
         launcher.follow_backend(Mock(poll=Mock(return_value=7)), logfile)
     assert "[前台运行]" in capsys.readouterr().out
+
+
+def test_launcher_lock_excludes_other_processes_and_can_be_reacquired(tmp_path):
+    lock_path = tmp_path / "owner.lock"
+    probe = (
+        "import sys; from scripts.launcher_platform import lock_file; "
+        "stream = open(sys.argv[1], 'a+b')\n"
+        "try: lock_file(stream, blocking=False)\n"
+        "except BlockingIOError: sys.exit(23)\n"
+    )
+    with lock_path.open("a+b") as stream:
+        launcher.lock_file(stream)
+        launcher.lock_file(stream)
+        blocked = subprocess.run([sys.executable, "-c", probe, str(lock_path)], cwd=launcher.ROOT, timeout=10)
+        assert blocked.returncode == 23
+        launcher.unlock_file(stream)
+        available = subprocess.run([sys.executable, "-c", probe, str(lock_path)], cwd=launcher.ROOT, timeout=10)
+        assert available.returncode == 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows native process identity")
+def test_windows_identity_is_stable_and_disappears_after_exit():
+    assert launcher.process_identity(os.getpid()) == launcher.process_identity(os.getpid())
+    assert launcher.process_identity(os.getpid())
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=10)
+    assert launcher.process_identity(child.pid) == ""
+
+
+def test_windows_npm_uses_node_without_a_command_shell(tmp_path, monkeypatch):
+    installation = tmp_path / "Node With Spaces"
+    cli = installation / "node_modules/npm/bin/npm-cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.touch()
+    node = str(installation / "node.exe")
+    monkeypatch.setattr(launcher, "WINDOWS", True)
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: node if name == "node" else str(installation / "npm.cmd"))
+    assert launcher.npm_command() == [node, str(cli)]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Native Windows PowerShell and Git Bash entrypoints")
+def test_windows_entries_forward_arguments(monkeypatch):
+    monkeypatch.setenv("MATHS_PYTHON", sys.executable)
+    git = shutil.which("git")
+    assert git, "Git for Windows is required for the Bash entrypoint test"
+    bash = Path(git).resolve().parents[1] / "bin/bash.exe"
+    assert bash.is_file()
+    for command in (
+        [str(bash), ".\\start.sh", "--help"],
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "start.ps1", "--help"],
+    ):
+        result = subprocess.run(command, cwd=launcher.ROOT, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=20)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "--env-file" in result.stdout and "--background" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows virtual environment discovery")
+@pytest.mark.parametrize("directory", [".venv-platform", ".venv", "venv"])
+def test_windows_entries_prefer_local_venv_over_broken_conda(tmp_path, monkeypatch, directory):
+    project = tmp_path / "Project With Spaces"
+    project.mkdir()
+    for entry in ("start.sh", "start.ps1"):
+        shutil.copyfile(launcher.ROOT / entry, project / entry)
+    (project / "scripts").mkdir()
+    (project / "scripts/web_launcher.py").write_text(
+        "import sys; print('SELECTED=' + sys.executable); print('ARGS=' + repr(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    venv.EnvBuilder(with_pip=False).create(project / directory)
+    monkeypatch.delenv("MATHS_PYTHON", raising=False)
+    monkeypatch.delenv("MATHS_CONDA_ENV", raising=False)
+    monkeypatch.setenv("CONDA_EXE", "/cygdrive/z/missing/conda.exe")
+    git = shutil.which("git")
+    bash = Path(git).resolve().parents[1] / "bin/bash.exe"
+    for command in (
+        [str(bash), "start.sh", "--env-file", "config with spaces.env"],
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "start.ps1",
+         "--env-file", "config with spaces.env"],
+    ):
+        result = subprocess.run(command, cwd=project, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=20)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert str(project / directory / "Scripts/python.exe").lower() in result.stdout.lower()
+        assert "['--env-file', 'config with spaces.env']" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows graceful shutdown without POSIX signals")
+def test_windows_stop_request_shuts_uvicorn_down_and_ignores_stale_identity(tmp_path):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    envfile = tmp_path / "test.env"
+    envfile.write_text("", encoding="utf-8")
+    stopfile = tmp_path / "stop.request"
+    code = (
+        "import importlib.util, sys; from fastapi import FastAPI; import uvicorn; "
+        f"spec = importlib.util.spec_from_file_location('launcher', {str(launcher.ROOT / 'scripts/web_launcher.py')!r}); "
+        "launcher = importlib.util.module_from_spec(spec); spec.loader.exec_module(launcher); "
+        "app = FastAPI(); app.get('/health')(lambda: {'status': 'ready'}); "
+        "launcher.serve = lambda port: uvicorn.run(app, host='127.0.0.1', port=port); "
+        f"sys.argv = ['launcher', '--serve', '--env-file', {str(envfile)!r}]; launcher.main()"
+    )
+    environment = {**os.environ, "MATHS_WEB_STATE_DIR": str(tmp_path), "MATHS_WEB_PORT": str(port),
+                   "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    with (tmp_path / "backend.log").open("w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code], cwd=launcher.ROOT, env=environment,
+                                 stdout=log, stderr=log, **launcher.child_process_options())
+        try:
+            for _ in range(100):
+                assert child.poll() is None, (tmp_path / "backend.log").read_text(encoding="utf-8")
+                try:
+                    with urlopen(f"http://127.0.0.1:{port}/health", timeout=0.2) as response:
+                        assert json.load(response)["status"] == "ready"
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            else:
+                pytest.fail("isolated backend did not start")
+            record = launcher.read_record(tmp_path / "backend.identity.json")
+            assert launcher.running(record)
+            launcher.request_stop({**record, "identity": "stale identity"}, stopfile)
+            time.sleep(0.6)
+            assert child.poll() is None
+            launcher.request_stop(record, stopfile)
+            child.wait(timeout=10)
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=10)
+    output = (tmp_path / "backend.log").read_text(encoding="utf-8")
+    assert "Application shutdown complete" in output
+    assert "Finished server process" in output

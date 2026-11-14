@@ -175,6 +175,21 @@ bash start.sh check   # 先检查环境与资源，不启动服务
 bash start.sh         # 检查、构建 React、启动 LangGraph 后端并监听日志
 ```
 
+Windows 原生运行可在 PowerShell 执行 `.\start.ps1`，或者使用 Git for Windows 提供的 Bash 执行 `bash .\start.sh`；无需安装 WSL。两种入口均加载 `.env`，包括 LangSmith、Redis 和模型配置，支持 `check`、`status`、`logs`、`stop` 和 `--background`。未显式指定环境时，依次识别项目内 `.venv-platform`、`.venv` 和 `venv`。`MATHS_PYTHON` 可指定解释器；显式设置 `MATHS_CONDA_ENV` 则选择该 Conda 环境。Windows Conda 使用原生命令，不加载 Bash 激活钩子。
+
+例如，在 Git Bash 中执行 `MATHS_PYTHON="./venv/Scripts/python.exe" bash start.sh`，或在 PowerShell 设置 `$env:MATHS_PYTHON = ".\venv\Scripts\python.exe"` 后执行 `bash .\start.sh`，可强制使用本地 venv，无需先激活 Conda。
+
+如果 `Get-Command bash` 显示 `C:\Windows\System32\bash.exe`，它是 WSL 入口，需要先让当前 PowerShell 使用 Git Bash：
+
+```powershell
+$gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source -Parent) -Parent
+Set-Alias -Name bash -Value (Join-Path $gitRoot 'bin\bash.exe')
+bash .\start.sh check
+bash .\start.sh
+```
+
+可将 `Set-Alias` 配置写入 PowerShell 的 `$PROFILE`，让新终端自动使用 Git Bash。若不需要 Bash，直接执行 `.\start.ps1`。Windows 启动器使用原生文件锁和进程身份检查，通过停止请求让后端正常退出，不按端口结束其他进程。
+
 检查内容包括依赖及版本冲突、模型 Key 是否存在、技能与策略资源、混合检索的本地模型离线推理、目录权限、Redis 配置和端口。检查不会调用远程解题模型，也不验证模型 Key 的有效性；提交题目后才会产生实际模型调用。
 
 服务默认监听 `0.0.0.0`（所有 IPv4 网卡）。看到 `[启动成功]` 后，本机可打开 [聊天页面](http://127.0.0.1:8010/chat/) 和 [/docs](http://127.0.0.1:8010/docs)；其他设备请使用服务器 IP 和对应端口访问。修改端口后使用对应地址。直接使用 `python -m agent_platform` 时，可通过 `--host 127.0.0.1` 限制为本机访问。
@@ -310,6 +325,17 @@ MATHS_CHAT_NAMESPACE=maths:chat:v1
 ```
 
 提供的 Redis 配置启用 AOF 和 `appendfsync always`，启动器会检查连接与持久化设置，但不负责启停 Redis。保留 Redis 数据、命名空间和题目目录以继续访问历史；原内存会话不会自动迁移。
+
+## 模型流式输出
+
+在项目根目录的 `.env` 中设置，修改后重新启动后端：
+
+```dotenv
+MATHS_MODEL_STREAMING=false
+```
+
+`true`（默认）启用解答正文流式生成；`false` 等待模型返回完整解答。该开关统一控制推导求解、重新求解与修复、应急求解、草稿整合和候选仲裁，默认模型与自定义 Solve Agent 均适用；客户端仍需支持流式。
+它不改变思考模式、题型识别、策略检索、规划和审查调用，也不关闭页面的 SSE 阶段进度和日志。终端已导出的同名环境变量优先于 `.env`。使用 `python -m agent_platform` 或分布式入口直接启动时，需自行将此变量加载到后端或 Worker 的进程环境；`bash start.sh` / `start.ps1` 会读取 `.env`。
 
 ## LangSmith 追踪
 

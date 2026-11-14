@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
-import fcntl
 import importlib.metadata
 import json
 import os
@@ -21,6 +21,9 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from scripts.launcher_platform import (  # noqa: E402
+    WINDOWS, child_process_options, lock_file, process_identity, unlock_file,
+)
 VECTOR_PROBE = """Domain: startup validation
 Goal: verify local embedding inference
 Objects: an offline text encoder and its strategy index
@@ -180,19 +183,71 @@ def paths():
     return directory, directory / "process.json", directory / "runtime.log"
 
 
-def process_identity(pid):
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart=", "-o", "command="],
-                            capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
 def running(record):
     return bool(record and record.get("identity")
                 and process_identity(record["pid"]) == record["identity"])
 
 
 def read_record(path):
-    return json.loads(path.read_text()) if path.exists() else None
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def write_record(path, record):
+    pending = path.with_suffix(".tmp")
+    pending.write_text(json.dumps(record), encoding="utf-8")
+    pending.replace(path)
+
+
+def npm_command():
+    if not WINDOWS:
+        return ["npm"]
+    npm = shutil.which("npm.cmd")
+    require(npm, "缺少 npm.cmd，请安装 Node.js >=22.12 并加入 PATH。")
+    cli = Path(npm).parent / "node_modules/npm/bin/npm-cli.js"
+    require(cli.is_file(), "找不到 npm-cli.js，请检查 Node.js/npm 安装。")
+    return [shutil.which("node"), str(cli)]
+
+
+def follow_logs(logfile):
+    logfile.touch(mode=0o600, exist_ok=True)
+    with logfile.open("r", encoding="utf-8", errors="replace") as stream:
+        for line in deque(stream, maxlen=100):
+            print(line, end="")
+        while True:
+            content = stream.read()
+            if content:
+                print(content, end="", flush=True)
+            else:
+                if logfile.stat().st_size < stream.tell():
+                    stream.seek(0)
+                time.sleep(0.25)
+
+
+def request_stop(record, stopfile):
+    if WINDOWS:
+        write_record(stopfile, record)
+    else:
+        os.kill(record["pid"], signal.SIGTERM)
+
+
+def watch_stop_request(stopfile):
+    import _thread
+
+    identity = process_identity(os.getpid())
+
+    def watch():
+        while True:
+            try:
+                request = read_record(stopfile)
+                if request and request.get("pid") == os.getpid() and request.get("identity") == identity:
+                    # Deliver SIGINT on the main thread so Uvicorn runs its normal shutdown.
+                    _thread.interrupt_main()
+                    return
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.25)
+
+    threading.Thread(target=watch, daemon=True, name="launcher-stop").start()
 
 
 def follow_backend(child, logfile):
@@ -225,7 +280,7 @@ def check_requirements(path, seen=None):
         return []
     seen.add(path)
     failures = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
@@ -314,7 +369,8 @@ def preflight(port):
     node = subprocess.check_output(["node", "--version"], text=True).strip().lstrip("v")
     require(tuple(map(int, node.split(".")[:2])) >= (22, 12), "Node.js 版本过低，需要 >=22.12。")
     print(f"[前端] Node.js {node}；正在检查 npm 依赖……", flush=True)
-    result = subprocess.run(["npm", "ls", "--depth=0"], cwd=ROOT / "client", capture_output=True, text=True)
+    result = subprocess.run([*npm_command(), "ls", "--depth=0"], cwd=ROOT / "client", capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     require(result.returncode == 0, "前端依赖缺失或版本不兼容：" + diagnostic(RuntimeError(result.stdout + result.stderr))
             + "\n请执行：cd client && npm ci")
     print("[前端] npm 依赖检查通过。", flush=True)
@@ -326,11 +382,11 @@ def preflight(port):
     question_root.mkdir(parents=True, exist_ok=True)
     with (question_root / "owner.lock").open("a+b") as owner:
         try:
-            fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file(owner, blocking=False)
         except BlockingIOError:
             raise LauncherError("MATHS_QUESTION_DIR 正被其他后端使用，请选择独立目录，或明确停止占用它的后端。") from None
-        finally:
-            fcntl.flock(owner, fcntl.LOCK_UN)
+        else:
+            unlock_file(owner)
     print("[题目存储] 目录可写，未被其他实例占用。", flush=True)
     redis_url = os.environ.get("MATHS_CHAT_REDIS_URL", "")
     if redis_url:
@@ -374,6 +430,12 @@ def serve(port):
 
 
 def main():
+    if WINDOWS:
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
     parser = argparse.ArgumentParser(description="启动 LangGraph 与 Web，检查环境并管理日志和进程。")
     parser.add_argument("action", nargs="?", default="start", choices=["check", "start", "status", "logs", "stop"],
                         help="check 检查、start 启动（默认）、status 状态、logs 日志、stop 停止")
@@ -392,15 +454,22 @@ def main():
         raise LauncherError("MATHS_STARTUP_TIMEOUT 必须是秒数。") from None
     require(0 < timeout <= 3600, "MATHS_STARTUP_TIMEOUT 必须大于 0 且不超过 3600 秒。")
     if args.serve:
+        if WINDOWS:
+            directory = paths()[0]
+            write_record(directory / "backend.identity.json", {
+                "pid": os.getpid(), "identity": process_identity(os.getpid()), "port": port,
+            })
+            watch_stop_request(directory / "stop.request")
         serve(port)
         return
     directory, pidfile, logfile = paths()
     if args.action == "logs":
-        logfile.touch(mode=0o600, exist_ok=True)
-        os.execvp("tail", ["tail", "-n", "100", "-f", str(logfile)])
+        follow_logs(logfile)
+        return
+    stopfile = directory / "stop.request"
     # Serialize start/stop to avoid orphaning a process or overwriting its record.
-    with (directory / "launcher.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with (directory / "launcher.lock").open("a+b") as lock:
+        lock_file(lock)
         record = read_record(pidfile)
         if args.action == "status":
             if running(record):
@@ -410,10 +479,11 @@ def main():
             return
         if args.action == "stop":
             if running(record):
-                os.kill(record["pid"], signal.SIGTERM)
+                request_stop(record, stopfile)
                 for _ in range(60):
                     if not running(record):
                         pidfile.unlink(missing_ok=True)
+                        stopfile.unlink(missing_ok=True)
                         print("[停止完成] 后端进程已退出。")
                         return
                     time.sleep(0.5)
@@ -438,16 +508,19 @@ def main():
                 return
             print(f"[前端构建] 正在执行 npm run build，详细日志：{logfile}", flush=True)
             with stage("React 前端构建"):
-                result = subprocess.run(["npm", "run", "build"], cwd=ROOT / "client", stdout=log, stderr=log)
+                result = subprocess.run([*npm_command(), "run", "build"], cwd=ROOT / "client", stdout=log, stderr=log)
                 if result.returncode != 0:
                     message = f"前端构建失败，退出码 {result.returncode}；请查看：{logfile}"
                     print("[构建失败] " + message, flush=True)
                     raise LauncherError(message)
             print(f"[后端启动] 前端构建成功，启动 LangGraph，等待健康检查，最长 {timeout:g} 秒。", flush=True)
+            stopfile.unlink(missing_ok=True)
+            backend_identity = directory / "backend.identity.json"
+            backend_identity.unlink(missing_ok=True)
             child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve",
                                       "--env-file", str(Path(args.env_file).resolve())],
                                      stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                     start_new_session=True, env=os.environ.copy())
+                                     env=os.environ.copy(), **child_process_options())
             record = {"pid": child.pid, "identity": process_identity(child.pid), "port": port}
             pidfile.write_text(json.dumps(record), encoding="utf-8")
             pidfile.chmod(0o600)
@@ -459,6 +532,13 @@ def main():
                     if child.poll() is not None:
                         print(f"[启动失败] 后端进程 {child.pid} 已退出，退出码 {child.returncode}；详情：{logfile}", flush=True)
                         raise LauncherError(f"后端进程已退出，请查看：{logfile}")
+                    if WINDOWS:
+                        # Windows virtualenv launchers can spawn a second Python process.
+                        backend_record = read_record(backend_identity)
+                        if backend_record and backend_record != record:
+                            require(running(backend_record), "无法核对后端进程身份，请查看日志。")
+                            record = backend_record
+                            write_record(pidfile, record)
                     try:
                         with urlopen(f"http://127.0.0.1:{port}/health/ready", timeout=2) as response:
                             ready = json.load(response)
@@ -466,9 +546,9 @@ def main():
                             print(f"[启动成功] http://127.0.0.1:{port}/chat/\n[运行日志] {logfile}")
                             if not args.background:
                                 # Other terminals must still be able to run status/stop.
-                                fcntl.flock(lock, fcntl.LOCK_UN)
+                                unlock_file(lock)
                                 follow_backend(child, logfile)
-                                fcntl.flock(lock, fcntl.LOCK_EX)
+                                lock_file(lock)
                                 if read_record(pidfile) == record:
                                     pidfile.unlink(missing_ok=True)
                             return
@@ -485,15 +565,19 @@ def main():
                 if isinstance(error, KeyboardInterrupt):
                     print("\n[正在停止] 收到 Ctrl+C，正在正常关闭 LangGraph 和 Web 服务……", flush=True)
                 if child.poll() is None:
-                    child.terminate()
+                    if WINDOWS:
+                        request_stop(record, stopfile)
+                    else:
+                        child.terminate()
                     try:
                         child.wait(timeout=15)
                     except subprocess.TimeoutExpired:
                         print("[退出中] 后端仍在停止，已保留进程记录。", file=sys.stderr)
                         raise
-                fcntl.flock(lock, fcntl.LOCK_EX)
+                lock_file(lock)
                 if read_record(pidfile) == record:
                     pidfile.unlink(missing_ok=True)
+                    stopfile.unlink(missing_ok=True)
                 if isinstance(error, KeyboardInterrupt):
                     print("[停止完成] LangGraph 和 Web 服务已关闭，运行日志已保留。", flush=True)
                     return

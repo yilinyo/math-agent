@@ -303,6 +303,7 @@ if self.library_references:
     })
 preview = None
 if (self.public_sections is not None
+        and env_flag("MATHS_MODEL_STREAMING", True)
         and getattr(self.client, "supports_content_stream", False) is True):
     preview = PublicAnswerStream(self.context, self.stage, self.check_running, self.public_sections)
     kwargs.update(on_content=preview.feed, check_running=self.check_running)

@@ -11,6 +11,7 @@ from agent_platform.runtime import RuntimeContext
 from agent_platform.safety import sanitize
 from agent_platform.tools.function_calling import call_with_tools
 from reasoning_agent.custom2.model_call import ModelCallBudgetExhausted, _normalize_response
+from reasoning_agent.custom.config import env_flag
 from agent_platform.observability import invoke_model
 from agent_platform.agent.routing import route
 from agent_platform.presentation.streaming import PublicAnswerStream
@@ -70,6 +71,7 @@ class TracedClient:
             self.context.model_calls[call_type] = self.context.model_calls.get(call_type, 0) + 1
             preview = None
             if (self.public_sections is not None
+                    and env_flag("MATHS_MODEL_STREAMING", True)
                     and getattr(self.client, "supports_content_stream", False) is True):
                 preview = PublicAnswerStream(self.context, self.stage, self.check_running, self.public_sections)
                 kwargs.update(on_content=preview.feed, check_running=self.check_running)

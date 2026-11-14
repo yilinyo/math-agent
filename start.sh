@@ -10,6 +10,24 @@ fi
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+NATIVE_WINDOWS=false
+# Git Bash runs native Windows Python; WSL keeps the Linux path below.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        NATIVE_WINDOWS=true
+        if [[ -z "${MATHS_PYTHON:-}" && -z "${MATHS_CONDA_ENV:-}" ]]; then
+            for candidate in .venv-platform/Scripts/python.exe .venv/Scripts/python.exe venv/Scripts/python.exe; do
+                if [[ -f "$candidate" ]]; then
+                    printf '[环境选择] 使用项目虚拟环境：%s\n' "$candidate"
+                    exec "$candidate" scripts/web_launcher.py "$@"
+                fi
+            done
+        fi
+        if [[ -n "${MATHS_PYTHON:-}" ]]; then
+            MATHS_PYTHON="$(cygpath -u "$MATHS_PYTHON")"
+        fi
+        ;;
+esac
 if [[ -n "${MATHS_PYTHON:-}" ]]; then
     if ! command -v "$MATHS_PYTHON" >/dev/null 2>&1; then
         printf '[错误] 找不到 MATHS_PYTHON 指定的解释器：%s\n' "$MATHS_PYTHON" >&2
@@ -17,6 +35,27 @@ if [[ -n "${MATHS_PYTHON:-}" ]]; then
     fi
     printf '[环境选择] 使用指定 Python 解释器：%s\n' "$MATHS_PYTHON"
     exec "$MATHS_PYTHON" scripts/web_launcher.py "$@"
+fi
+if $NATIVE_WINDOWS; then
+    # Native Conda avoids shell hooks with incompatible /cygdrive paths.
+    CONDA_EXECUTABLE="$(command -v conda.exe || true)"
+    if [[ -n "$CONDA_EXECUTABLE" ]]; then
+        export CONDA_EXE="$(cygpath -w "$CONDA_EXECUTABLE")"
+        export _CONDA_EXE="$CONDA_EXE" _CE_M='' _CE_CONDA=''
+        unset CONDA_BAT
+        printf '[环境选择] 使用 Conda 环境：%s\n' "${MATHS_CONDA_ENV:-intern}"
+        exec "$CONDA_EXECUTABLE" run --no-capture-output -n "${MATHS_CONDA_ENV:-intern}" python scripts/web_launcher.py "$@"
+    fi
+    if [[ -n "${MATHS_CONDA_ENV:-}" ]]; then
+        printf '[错误] 找不到 conda.exe；请安装 Conda，或通过 MATHS_PYTHON 指定本地虚拟环境。\n' >&2
+        exit 1
+    fi
+    if command -v python >/dev/null 2>&1; then
+        printf '[环境选择] 使用当前 Windows Python；随后检查版本和依赖。\n'
+        exec python scripts/web_launcher.py "$@"
+    fi
+    printf '[错误] 找不到 Windows Python；请创建本地虚拟环境或设置 MATHS_PYTHON。\n' >&2
+    exit 1
 fi
 if command -v conda >/dev/null 2>&1; then
     printf '[环境选择] 使用 Conda 环境：%s\n' "${MATHS_CONDA_ENV:-intern}"
