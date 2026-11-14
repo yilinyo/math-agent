@@ -14,7 +14,7 @@ from reasoning_agent.custom2.model_call import ModelCallBudgetExhausted, _normal
 from reasoning_agent.custom.config import env_flag
 from agent_platform.observability import invoke_model
 from agent_platform.agent.routing import route
-from agent_platform.presentation.streaming import PublicAnswerStream
+from agent_platform.presentation.streaming import ModelReasoningStream, PublicAnswerStream
 from llm_client import chat_failure_diagnostics
 from agent_platform.presentation.trace import stage_context, stage_outcome
 
@@ -75,9 +75,18 @@ class TracedClient:
                     and getattr(self.client, "supports_content_stream", False) is True):
                 preview = PublicAnswerStream(self.context, self.stage, self.check_running, self.public_sections)
                 kwargs.update(on_content=preview.feed, check_running=self.check_running)
+            reasoning = None
+            if (env_flag("MATHS_MODEL_STREAMING", True)
+                    and env_flag("MATHS_SHOW_MODEL_REASONING", False)
+                    and getattr(self.client, "supports_reasoning_stream", False) is True):
+                reasoning = ModelReasoningStream(self.context, self.stage, self.check_running,
+                                                 call_type, kwargs.get("messages", []))
+                kwargs.update(on_reasoning=reasoning.feed, check_running=self.check_running)
             try:
                 kwargs["request_timeout"] = max(.001, deadline - time.monotonic())
                 raw = self.tracing_context.copy().run(invoke_model, self.client, kwargs, call_type)
+                if reasoning:
+                    reasoning.complete()
                 if preview:
                     if isinstance(raw, dict) and raw.get("tool_calls"):
                         preview.discard()
@@ -85,6 +94,8 @@ class TracedClient:
                         preview.complete()
             except Exception as exc:
                 self.check_running()
+                if reasoning:
+                    reasoning.interrupt()
                 if preview:
                     preview.discard()
                 self.context.record(self.stage, "model.failed", {

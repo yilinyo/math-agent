@@ -11,6 +11,19 @@ const event = (sequence: number, event_type: string, payload = {}, stage_id = 's
 });
 
 describe('readable execution diagnostics', () => {
+  it('shows the shared review budget and distinguishes an unfinished review from a pass', () => {
+    const started = describeEvent(event(1, 'reasoning.event', {
+      operation: 'review_round_started', budget_seconds: 150,
+    }, 'verify'))!;
+    expect(started.details).toContainEqual(['本轮审查预算', '150 秒']);
+    const unfinished = describeEvent(event(2, 'reasoning.event', {
+      operation: 'review_round_completed', review_status: 'service_unavailable',
+    }, 'verify'))!;
+    expect(unfinished.title).toContain('未完成');
+    expect(unfinished.level).toBe('warning');
+    expect(describeEvent(event(3, 'reasoning.event', { operation: 'audit_deep_started' }, 'verify'))!.title)
+      .toContain('针对疑点');
+  });
   it('correlates parallel model calls by operation ID and keeps their actual usage and duration', () => {
     const rows = traceRows([
       event(1, 'model.started', { operation_id: 'a', call_type: 'solver' }),

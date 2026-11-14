@@ -8,9 +8,8 @@ def run(engine, state, problem, profile, plan, update):
         audit = StagedAudit(verdict="pass", review_status="completed")
         fidelity = StagedModelFidelity()
     else:
-        fidelity = engine._model_fidelity(problem, state["draft"], plan)
-        audit = (engine._fidelity_failure_as_audit(fidelity) if fidelity.verdict == "fail"
-                 else engine._audit(problem, profile, plan, state["draft"], checks))
+        fidelity, audit = engine._review_candidate(problem, profile, plan, state["draft"], checks,
+                                                   preserve_repair=not state["repair_count"])
     audit = engine._apply_local_evidence(audit, checks)
     if "non_concept_final_answer_contains_chinese" in checks["summary"] and audit.verdict == "pass":
         audit = audit.model_copy(update={"verdict": "fail", "error_type": "format",

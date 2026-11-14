@@ -37,6 +37,26 @@ class CaptureClient:
 
 
 class StagedRuntimeConfigTests(unittest.TestCase):
+    def test_staged_thinking_can_be_disabled_without_skipping_model_calls(self):
+        settings = {
+            "STAGED_SOLVER_COMPRESSED_THINKING_MODE": "false",
+            "STAGED_SOLVER_REPAIR_THINKING_MODE": "false",
+            "STAGED_TARGETED_AUDIT_THINKING_MODE": "false",
+        }
+        with patch.dict(os.environ, settings):
+            config = AgentConfig()
+        self.assertFalse(config.staged_solver_compressed_thinking_mode)
+        self.assertFalse(config.staged_solver_repair_thinking_mode)
+        self.assertFalse(config.staged_targeted_audit_thinking_mode)
+        for call_type in ("solver_compressed", "solver_repair", "targeted_audit"):
+            client = CaptureClient(["public answer"])
+            runtime = StagedReasoningRuntime(client, config)
+            runtime.state = AgentState(problem="synthetic problem")
+            result = runtime._call(call_type, "system", {}, max_tokens=8192)
+            self.assertEqual(result, "public answer")
+            self.assertEqual(len(client.calls), 1)
+            self.assertIs(client.calls[0]["thinking_mode"], False)
+
     def test_platform_deadline_headroom_reduces_effective_staged_budget(self):
         self.assertEqual(effective_staged_budget_seconds(AgentConfig()), (1200.0, 0.0, 1200.0))
         self.assertEqual(
@@ -76,12 +96,12 @@ class StagedRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.staged_solver_compressed_max_tokens, 131072)
         self.assertEqual(config.staged_primary_compact_timeout_seconds, 660.0)
         self.assertEqual(config.staged_solver_compressed_call_estimate_seconds, 660.0)
-        self.assertEqual(config.staged_targeted_audit_timeout_seconds, 360.0)
+        self.assertEqual(config.staged_targeted_audit_timeout_seconds, 45.0)
         self.assertEqual(config.staged_audit_retry_max_tokens, 4096)
-        self.assertEqual(config.staged_audit_retry_timeout_seconds, 60.0)
+        self.assertEqual(config.staged_audit_retry_timeout_seconds, 10.0)
         self.assertTrue(config.staged_model_fidelity_enabled)
         self.assertEqual(config.staged_model_fidelity_thinking_max_tokens, 65536)
-        self.assertEqual(config.staged_model_fidelity_timeout_seconds, 200.0)
+        self.assertEqual(config.staged_model_fidelity_timeout_seconds, 20.0)
         self.assertEqual(config.staged_constraint_ledger_max_chars, 12000)
         self.assertEqual(config.staged_emergency_timeout_seconds, 300.0)
         self.assertEqual(config.staged_final_arbitrator_timeout_seconds, 600.0)
@@ -519,9 +539,9 @@ class StagedRuntimeConfigTests(unittest.TestCase):
             deadline_at=now + 300, finalize_reserve_seconds=0,
         )
 
-        audit = runtime._audit(
+        audit = runtime._audit_once(
             "有向计数", ProblemProfile(), StagedStrategy(),
-            "把有向边当作无向边；每列连续访问", {"ok": True, "summary": []},
+            "把有向边当作无向边；每列连续访问", {"ok": True, "summary": []}, thinking_mode=False,
         )
         runtime._remember_audit_findings(audit)
         trace_data = runtime._audit_trace_data(audit)
@@ -545,9 +565,9 @@ class StagedRuntimeConfigTests(unittest.TestCase):
             deadline_at=now + 300, finalize_reserve_seconds=0,
         )
 
-        audit = runtime._audit(
+        audit = runtime._audit_once(
             "函数分类", ProblemProfile(), StagedStrategy(),
-            "草稿结论：exotic 整数恰为奇完全平方数。", {"ok": True, "summary": []},
+            "草稿结论：exotic 整数恰为奇完全平方数。", {"ok": True, "summary": []}, thinking_mode=False,
         )
 
         self.assertEqual(audit.verdict, "uncertain")
@@ -868,7 +888,7 @@ class StagedRuntimeConfigTests(unittest.TestCase):
         )
         compressed_user = client.calls[1]["messages"][1]
         self.assertEqual(compressed_user["role"], "user")
-        self.assertIn("【压缩不思考救援】", compressed_user["content"])
+        self.assertIn("【定向求解与修复】", compressed_user["content"])
         self.assertIn("失败原因：missing_fixed_sections", compressed_user["content"])
         self.assertIn("代数技能", compressed_user["content"])
         self.assertEqual(

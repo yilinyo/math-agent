@@ -60,7 +60,10 @@ class ScriptedClient:
 
 
 def config(**updates):
-    defaults = {"staged_strategy_retrieval_enabled": False,
+    # Keep the frozen adapter's old reserve field aligned for structural parity;
+    # the staged budget policy is covered separately with a controlled clock.
+    defaults = {"custom2_finalize_reserve_seconds": 30.0,
+                "staged_strategy_retrieval_enabled": False,
                 "staged_strategy_model_enabled": True,
                 "staged_compact_reasoning_only": False,
                 "staged_solver_compressed_retry_enabled": False}

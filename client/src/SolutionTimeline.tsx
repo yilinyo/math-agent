@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Check, ChevronRight, LoaderCircle, Search, TriangleAlert } from 'lucide-react';
+import { Activity, BrainCircuit, Check, ChevronRight, LoaderCircle, Search, TriangleAlert } from 'lucide-react';
 import { stageNames, terminal, watchTask, type Task } from './api';
 import { timelineFromEvent, type TimelineState } from './timelineState';
 import { formatDuration } from './timing';
@@ -40,7 +40,7 @@ export default function SolutionTimeline({ task, timeline, now }: { task: Task; 
         if (!visibleStages.has(stage.id)) return null;
         const durationEnd = stage.finishedAt || stage.stoppedAt || current.stages[index + 1]?.startedAt || end;
         const elapsed = (durationEnd ? Date.parse(durationEnd) : active ? now : NaN) - Date.parse(stage.startedAt);
-        const content = stage.content.filter(item => item.content);
+        const content = stage.content.filter(item => item.content || item.kind === 'reasoning');
         const running = active && index === current.stages.length - 1 && !stage.finishedAt && !stage.stoppedAt;
         const passed = stage.outcome === 'pass' || stage.outcome === 'accepted';
         const warning = !!stage.outcome && !['completed', 'pass', 'accepted', 'succeeded'].includes(stage.outcome);
@@ -61,6 +61,15 @@ export default function SolutionTimeline({ task, timeline, now }: { task: Task; 
             {running ? '正在执行' : outcomes[stage.outcome || ''] || (stage.finishedAt ? '执行结束' : '未记录阶段结束')}
           </p>
           {!filtering && content.map(item => {
+            if (item.kind === 'reasoning') return <details key={item.id} className="timeline-reasoning" open>
+              <summary><BrainCircuit size={14} /><span>{item.title}</span><small>
+                {item.truncated ? '已达展示上限' : item.interrupted || (!item.complete && !running) ? '已中断'
+                  : item.complete ? '生成结束' : '正在思考'}
+              </small></summary>
+              {item.content ? <MathMarkdown content={item.content} /> : <p className="muted">
+                {item.complete || item.interrupted || !running ? '未收到可展示内容。' : '正在接收思考内容。'}
+              </p>}
+            </details>;
             if (item.kind === 'solution') round++;
             return <section key={item.id} className="timeline-content">
               {item.kind === 'solution' ? <p className="timeline-draft-label">

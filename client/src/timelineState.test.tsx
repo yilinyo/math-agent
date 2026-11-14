@@ -14,6 +14,33 @@ const task = { id: 'task', session_id: 'session', status: 'succeeded',
 const replay = (events: TraceEvent[]) => events.reduce<TimelineState | undefined>(timelineFromEvent, undefined)!;
 
 describe('solution timeline history', () => {
+  it('keeps reasoning and answers separate through replay, interrupted calls and completed drafts', () => {
+    const timeline = replay([event(1, 'stage.started'),
+      event(2, 'reasoning.started', 'solve', { stream_id: 'r' }),
+      event(3, 'reasoning.delta', 'solve', { stream_id: 'r', index: 0, text: 'Thinking $x=2$' }),
+      event(4, 'reasoning.delta', 'solve', { stream_id: 'r', index: 0, text: 'duplicate' }),
+      event(5, 'reasoning.delta', 'solve', { stream_id: 'r', index: 2, text: 'gap' }),
+      event(6, 'answer.started', 'solve', { stream_id: 'a', preview: true }),
+      event(7, 'answer.delta', 'solve', { stream_id: 'a', index: 0, text: 'Live solution' }),
+      event(8, 'reasoning.completed', 'solve', { stream_id: 'r', chunks: 1 }),
+      event(9, 'stage.explanation', 'solve', { kind: 'solution', content: 'Checked solution' }),
+      event(10, 'reasoning.started', 'solve', { stream_id: 'r2' }),
+      event(11, 'reasoning.delta', 'solve', { stream_id: 'r2', index: 0, text: 'Second attempt' }),
+      event(12, 'reasoning.interrupted', 'solve', { stream_id: 'r2', chunks: 1, truncated: true }),
+      event(13, 'reasoning.delta', 'solve', { stream_id: 'r2', index: 1, text: 'late' })]);
+    expect(timeline.stages[0].content.map(row => row.content)).toEqual([
+      'Thinking $x=2$', 'Checked solution', 'Second attempt',
+    ]);
+    expect(timelineFromEvent(timeline, event(3, 'reasoning.delta', 'solve', {
+      stream_id: 'r', index: 0, text: 'duplicate',
+    }))).toBe(timeline);
+    const html = renderToStaticMarkup(<SolutionTimeline task={task} timeline={timeline} now={300000} />);
+    expect(html.match(/模型思考过程/g)).toHaveLength(2);
+    expect(html).toContain('已达展示上限');
+    expect(html).toContain('第 1 轮公开推导');
+    expect(html).not.toContain('第 2 轮公开推导');
+  });
+
   it('retains repeated repairs after more than 120 events and deduplicates history replay', () => {
     const events = [event(1, 'stage.started'),
       event(2, 'stage.explanation', 'solve', { kind: 'solution', content: 'Original $x=1$' }),

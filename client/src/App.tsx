@@ -225,7 +225,8 @@ export default function App() {
         return { ...previous, [key]: { ...before, started, completed,
           stream: answerFromEvent(before.stream, event),
           timeline: timelineFromEvent(before.timeline, event),
-          events: event.event_type === 'answer.delta' ? before.events : [...before.events, event].slice(-120) } };
+          events: ['answer.delta', 'reasoning.delta'].includes(event.event_type)
+            ? before.events : [...before.events, event].slice(-120) } };
       }),
       connection: setConnection,
       error: failure => setRecords(previous => ({ ...previous,

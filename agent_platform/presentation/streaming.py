@@ -7,6 +7,69 @@ from agent_platform.observability import redact_trace_value
 from agent_platform.presentation.instructions import SECTIONS
 
 
+class ModelReasoningStream:
+    """Opt-in model reasoning, independent of public drafts and graph state."""
+
+    limit = 120000
+
+    def __init__(self, context, stage, check_running, call_type, messages):
+        self.context, self.stage, self.check_running = context, stage, check_running
+        self.call_type = call_type
+        self.id = str(uuid4())
+        self.index = 0
+        self.pending = ""
+        self.total = 0
+        self.opened = False
+        self.truncated = False
+        self.prompt_lines = tuple(
+            line.strip() for message in messages if message.get("role") in {"system", "developer"}
+            and isinstance(message.get("content"), str)
+            for line in message["content"].splitlines() if len(line.strip()) >= 24
+        )
+
+    def record(self, kind, **payload):
+        self.check_running()
+        self.context.record(self.stage, f"reasoning.{kind}", {
+            "stream_id": self.id, "call_type": self.call_type, **payload,
+        })
+
+    def feed(self, text):
+        self.check_running()
+        if not self.opened:
+            self.record("started")
+            self.opened = True
+        self.total += len(text)
+        if self.total > self.limit:
+            self.truncated = True
+            self.pending = ""
+            return
+        self.pending += text
+        # Redact whole lines so secrets split across network chunks stay hidden.
+        while "\n" in self.pending:
+            line, self.pending = self.pending.split("\n", 1)
+            self.publish(line + "\n")
+
+    def publish(self, text):
+        if any(line in text for line in self.prompt_lines):
+            text = "[prompt content hidden]\n"
+        public = redact_trace_value(text)
+        for offset in range(0, len(public), 4000):
+            self.record("delta", index=self.index, text=public[offset:offset + 4000])
+            self.index += 1
+
+    def complete(self):
+        if self.opened:
+            if self.pending:
+                self.publish(self.pending)
+                self.pending = ""
+            self.record("completed", chunks=self.index, truncated=self.truncated)
+
+    def interrupt(self):
+        if self.opened:
+            self.pending = ""
+            self.record("interrupted", chunks=self.index, truncated=self.truncated)
+
+
 class PublicAnswerStream:
     def __init__(self, context, stage, check_running, selected=SECTIONS):
         self.context, self.stage = context, stage

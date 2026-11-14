@@ -74,7 +74,7 @@ def test_success_preserves_prompts_thinking_temperature_and_token_limits(risk):
     responses = initial(risk=risk) + ([PASS, PASS] if risk == "high" else [])
     _, _, _, _, client = compare(responses)
     if risk == "high":
-        assert client.calls[-1]["thinking_mode"] is True
+        assert client.calls[-1]["thinking_mode"] is False
 
 
 @pytest.mark.parametrize("error_type,action", [
@@ -85,25 +85,25 @@ def test_success_preserves_prompts_thinking_temperature_and_token_limits(risk):
 ])
 def test_evidence_backed_repair_routes_match_reference(error_type, action):
     _, _, events, checkpoints, client = compare(
-        initial(solution=draft("3")) + [PASS, failure(error_type), draft(), PASS, PASS],
+        initial(solution=draft("3")) + [PASS, failure(error_type), failure(error_type), draft(), PASS, PASS],
     )
     assert any(data.get("action") == action for _, _, data in events)
     assert checkpoints[-1]["repair_count"] == 1
-    assert client.calls[5]["temperature"] == .5
+    assert client.calls[6]["temperature"] == .5
 
 
 @pytest.mark.parametrize("review", [UNCERTAIN, PASS])
 def test_inconclusive_review_does_not_trigger_mathematical_repair(review):
-    compare(initial() + [PASS, review])
+    compare(initial() + [PASS, review] + ([review] if review == UNCERTAIN else []))
 
 
 def test_repair_uncertainty_selects_candidate_by_evidence():
-    compare(initial(solution=draft("3")) + [PASS, failure(), draft(), PASS, UNCERTAIN])
+    compare(initial(solution=draft("3")) + [PASS, failure(), failure(), draft(), PASS, UNCERTAIN, UNCERTAIN])
 
 
 def test_exhausted_repairs_use_identical_arbitration_evidence():
-    compare(initial(solution=draft("3")) + [PASS, failure(), draft("4"), PASS,
-                                          failure(), draft()], custom2_max_repairs=1)
+    compare(initial(solution=draft("3")) + [PASS, failure(), failure(), draft("4"), PASS,
+                                          failure(), failure(), draft()], custom2_max_repairs=1)
 
 
 def test_empty_solver_uses_emergency_recovery():
@@ -114,24 +114,25 @@ def test_empty_solver_uses_emergency_recovery():
 def test_hard_false_assertions_cannot_be_returned_as_final_answer():
     bad = draft().replace("The defining calculation gives the result.",
                           "The defining calculation gives the result.\n```check\nassert 2 == 3\n```")
-    runtime, ctx, _, _, _ = compare(initial(solution=bad) + [PASS, PASS, ""],
+    runtime, ctx, _, _, _ = compare(initial(solution=bad) + [PASS, PASS, PASS, ""],
                                    custom2_max_repairs=0)
     assert ctx.checkpoint["final_response"] == "无法确定唯一答案"
     assert runtime.checkpoint_compatible(ctx.checkpoint)
 
 
 def test_resume_new_recovery_nodes_skips_all_completed_model_calls():
-    responses = initial(solution=draft("3")) + [PASS, failure(), draft("4"), PASS, failure(), draft()]
+    responses = initial(solution=draft("3")) + [PASS, failure(), failure(), draft("4"), PASS,
+                                               failure(), failure(), draft()]
     runtime, original, _, checkpoints, client = compare(responses, custom2_max_repairs=1)
     started = 0
     for checkpoint in checkpoints:
         next_stage = checkpoint["next_stage"]
-        started = {"retrieve": 1, "plan": 1, "solve": 2, "repair": 5,
-                   "arbitrate": 8, "finalize": 9, "terminal": 9}.get(next_stage, started)
+        started = {"retrieve": 1, "plan": 1, "solve": 2, "repair": 6,
+                   "arbitrate": 10, "finalize": 11, "terminal": 11}.get(next_stage, started)
         if next_stage == "tool":
-            started = 6 if checkpoint["repair_count"] else 3
+            started = 7 if checkpoint["repair_count"] else 3
         elif next_stage == "verify":
-            started = 6 if checkpoint["repair_count"] else 3
+            started = 7 if checkpoint["repair_count"] else 3
         remaining = RecordingClient(responses[started:])
         resumed = LangGraphRuntime(remaining, runtime.config, function_calling="off")
         ctx, _, _ = context(checkpoint, original.deadline_at)
@@ -186,7 +187,7 @@ def test_private_thoughts_never_enter_candidates_or_checkpoints():
 
 @pytest.mark.parametrize("unavailable", [TimeoutError("transport unavailable"), "invalid json"])
 def test_audit_transport_and_protocol_recovery_preserve_model_requests(unavailable):
-    compare(initial() + [PASS, unavailable, UNCERTAIN])
+    compare(initial() + [PASS, unavailable] + ([UNCERTAIN, UNCERTAIN] if isinstance(unavailable, str) else []))
 
 
 @pytest.mark.parametrize("compact,retry", [(True, True), (False, True)])

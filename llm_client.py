@@ -97,6 +97,7 @@ class InternChatClient:
     """Small OpenAI-compatible chat client for the competition sample."""
 
     supports_content_stream = True
+    supports_reasoning_stream = True
 
     def __init__(
         self,
@@ -135,6 +136,7 @@ class InternChatClient:
         return_message: bool = False,
         request_timeout: Optional[float] = None,
         on_content: Callable[[str], None] | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
         check_running: Callable[[], None] | None = None,
         **request_args: Any,
     ) -> ChatResponse:
@@ -170,7 +172,8 @@ class InternChatClient:
         # ``messages`` is the only required per-call argument and must not be
         # replaced accidentally by client-wide defaults.
         payload["messages"] = messages
-        if on_content is not None:
+        streaming = on_content is not None or on_reasoning is not None
+        if streaming:
             payload["stream"] = True
 
         headers = {
@@ -192,7 +195,7 @@ class InternChatClient:
             and float(request_timeout) > float(self.timeout)
         )
         # A partially published stream must never be silently replayed on retry.
-        retry_count = 1 if single_long_attempt or on_content is not None else self.retry
+        retry_count = 1 if single_long_attempt or streaming else self.retry
         last_error = None
         last_status_code: int | None = None
         last_response_body = ""
@@ -223,22 +226,23 @@ class InternChatClient:
                     headers=headers,
                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                     timeout=transport_timeout,
-                    **({"stream": True} if on_content is not None else {}),
+                    **({"stream": True} if streaming else {}),
                 )
-                if on_content is not None:
+                if streaming:
                     stream_response = response
                 response.raise_for_status()
-                if on_content is not None:
+                if streaming:
                     data = self._read_stream(
                         response, on_content, check_running,
                         call_started_monotonic + float(request_timeout or transport_timeout),
+                        on_reasoning=on_reasoning,
                     )
                 else:
                     data = response.json()
                 message = data["choices"][0]["message"]
                 ended_at = datetime.now(timezone.utc)
                 duration_seconds = max(0.0, time.perf_counter() - started_monotonic)
-                if DUMP_CHAT_REQUESTS and on_content is None:
+                if DUMP_CHAT_REQUESTS and not streaming:
                     self._dump_request_payload_safely(
                         payload,
                         attempt=attempt + 1,
@@ -271,7 +275,7 @@ class InternChatClient:
                 last_status_code = status_code if isinstance(status_code, int) else None
                 # Never drain an interrupted streaming body for diagnostics.
                 last_response_body = (
-                    getattr(response, "text", "") if response is not None and on_content is None else ""
+                    getattr(response, "text", "") if response is not None and not streaming else ""
                 )
                 if DEBUG_CHAT_REQUESTS:
                     self._log_request_summary(
@@ -317,7 +321,7 @@ class InternChatClient:
         ) from last_error
 
     @staticmethod
-    def _read_stream(response, on_content, check_running, deadline):
+    def _read_stream(response, on_content, check_running, deadline, *, on_reasoning=None):
         message = {"role": "assistant", "content": ""}
         calls = {}
         usage = None
@@ -359,8 +363,10 @@ class InternChatClient:
                         if not isinstance(text, str):
                             raise ModelStreamError("invalid_model_stream")
                         message[key] = message.get(key, "") + text
-                        if key == "content" and text:
+                        if key == "content" and text and on_content is not None:
                             on_content(text)
+                        elif key == "reasoning_content" and text and on_reasoning is not None:
+                            on_reasoning(text)
                 parts = delta.get("tool_calls")
                 if parts is None:
                     parts = []

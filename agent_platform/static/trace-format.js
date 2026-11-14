@@ -137,6 +137,18 @@ export function describeEvent(event) {
         case 'compressed_solution_invalid': title = '压缩解答不完整，尚不能作为最终候选。'; level = 'warning'; break;
         case 'recovery_routed': title = '已选择修复路径。'; break;
         case 'best_candidate_saved': title = '已保留本轮可用草稿。'; break;
+        case 'solution_candidate_selected': title = '正文为空，已将思考内容送入候选检查。'; break;
+        case 'review_round_started':
+          title = '开始本轮审查，一致性检查、快速审查、深度复核和格式恢复共用预算。';
+          if (number(p.budget_seconds) !== null) add('本轮审查预算', `${p.budget_seconds} 秒`);
+          break;
+        case 'review_round_completed':
+          title = p.review_status === 'service_unavailable' ? '本轮审查未完成，保留候选但不标记审查通过。' : '本轮审查执行结束。';
+          level = p.review_status === 'service_unavailable' ? 'warning' : 'info';
+          break;
+        case 'audit_fast_completed': title = '快速审查已结束。'; break;
+        case 'audit_deep_started': title = '快速审查发现疑点，开始针对疑点深度复核。'; break;
+        case 'audit_deep_completed': title = '针对疑点的深度复核已结束。'; break;
         case 'deadline_candidate_selected': title = '已根据现有检查记录选择候选草稿。'; break;
         case 'model_fidelity_skipped': title = '本轮跳过题意一致性模型检查。'; level = 'warning'; break;
         case 'model_fidelity_unavailable': title = '未获得题意一致性检查结论。'; level = 'warning'; break;
@@ -230,7 +242,7 @@ export function publicTraceEvent(event) {
     'reason', 'source', 'candidate_source', 'candidate_id', 'accepted', 'budget_exhausted', 'hard_failure_count', 'review_source', 'routing_reason', 'candidate_round',
     'confirmed_audit_failure', 'format_failures', 'local_verdict', 'verdict', 'duration_ms', 'latency_ms',
     'name', 'transport', 'attempt', 'attempts', 'retry_count', 'retryable', 'error_code', 'error_type', 'http_status',
-    'content_length', 'usage', 'hit_count', 'references', 'program_checks', 'hard_failures', 'review_status',
+    'content_length', 'usage', 'hit_count', 'references', 'program_checks', 'hard_failures', 'review_status', 'budget_seconds',
     'action', 'recovery_action', 'kind', 'title', 'content', 'preview', 'stream_id', 'chunks', 'index', 'text', 'result', 'extraction', 'agent'];
   const nested = new Set(['prompt_tokens', 'completion_tokens', 'total_tokens', 'id', 'revision', 'kind', 'title',
     'category', 'name', 'score', 'chunk_id', 'document_id', 'rank', 'expression', 'source', 'status', 'verdict', 'result',

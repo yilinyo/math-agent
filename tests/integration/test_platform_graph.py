@@ -124,6 +124,48 @@ def test_resume_at_every_completed_node_does_not_replay_model_calls():
         assert len(client.calls) == count
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_reasoning_only_solver_reaches_checks_and_audit_with_the_same_draft(monkeypatch, streaming):
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("MATHS_SHOW_MODEL_REASONING", "true")
+    monkeypatch.setenv("MATHS_MODEL_STREAMING", str(streaming).lower())
+    client = client_for_pass()
+    client.responses[2] = {"content": "", "reasoning_content": draft(), "_finish_reason": "stop"}
+    runtime = LangGraphRuntime(client, config())
+    ctx, events, checkpoints = context()
+    result = asyncio.run(runtime.run(ctx))
+    assert result.final_response == r"\boxed{2}"
+    assert [state["next_stage"] for state in checkpoints] == [
+        "retrieve", "plan", "solve", "tool", "verify", "finalize", "terminal",
+    ]
+    solved = next(state for state in checkpoints if state["next_stage"] == "tool")
+    assert solved["draft"] == draft() and solved["candidates"][-1]["draft"] == draft()
+    assert all(json.loads(call["messages"][1]["content"])["solution"] == draft()
+               for call in client.calls[3:])
+    assert any(kind == "reasoning.event" and data.get("operation") == "solution_candidate_selected"
+               and data.get("source") == "reasoning_content" for _, kind, data in events)
+    assert len(client.calls) == 5
+
+
+def test_reasoning_only_repair_replaces_draft_and_is_reviewed(monkeypatch):
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    client = ScriptedClient(['{"answer_mode":"computation"}', '{"risk_level":"high"}',
+                             {"content": "", "reasoning_content": draft("3")},
+                             {"content": "", "reasoning_content": draft("7")}])
+    runtime = LangGraphRuntime(client, config(custom2_max_repairs=1))
+    ctx, _, checkpoints = context()
+    with patch.object(StagedAdapter, "_model_fidelity", return_value=StagedModelFidelity(verdict="pass")), \
+         patch.object(StagedAdapter, "_audit", side_effect=[
+             StagedAudit(verdict="fail", first_fatal_error="wrong step"), StagedAudit(verdict="pass"),
+         ]) as audit:
+        result = asyncio.run(runtime.run(ctx))
+    assert result.final_response == r"\boxed{7}"
+    assert audit.call_args_list[0].args[3] == draft("3")
+    assert audit.call_args_list[1].args[3] == draft("7")
+    assert checkpoints[-1]["repair_count"] == 1
+    assert [candidate["draft"] for candidate in checkpoints[-1]["candidates"]] == [draft("3"), draft("7")]
+
+
 @pytest.mark.parametrize("change", ["version", "owner", "problem", "config", "deadline", "next_stage"])
 def test_checkpoint_mismatch_is_rejected(change):
     runtime = LangGraphRuntime(client_for_pass(), config())
@@ -135,6 +177,38 @@ def test_checkpoint_mismatch_is_rejected(change):
     resumed, _, _ = context(state, ctx.deadline_at)
     with pytest.raises(CheckpointIncompatible):
         asyncio.run(runtime.run(resumed))
+
+
+def test_review_timeout_preserves_candidate_without_marking_pass_or_starting_repair(monkeypatch):
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    client = client_for_pass()
+    client.responses[4] = TimeoutError("synthetic audit timeout")
+    runtime = LangGraphRuntime(client, config())
+    ctx, events, checkpoints = context()
+    result = asyncio.run(runtime.run(ctx))
+    reviewed = next(state for state in checkpoints if state.get("verification"))
+    assert reviewed["verification"]["verdict"] == "uncertain"
+    assert reviewed["verification"]["review_status"] == "service_unavailable"
+    assert reviewed["next_stage"] == "finalize" and reviewed["repair_count"] == 0
+    assert reviewed["draft"] == draft()
+    assert result.final_response == r"\boxed{2}"
+    assert len(client.calls) == 5
+    assert not any(kind == "reasoning.event" and data.get("source") == "verified"
+                   for _, kind, data in events)
+
+
+def test_quick_review_doubt_escalates_and_a_successful_deep_review_can_clear_it(monkeypatch):
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    client = client_for_pass()
+    client.responses[4:] = ['{"verdict":"uncertain","unmet_obligations":["Check the boundary"]}',
+                            '{"verdict":"pass"}']
+    runtime = LangGraphRuntime(client, config())
+    ctx, events, checkpoints = context()
+    assert asyncio.run(runtime.run(ctx)).final_response == r"\boxed{2}"
+    assert [call["thinking_mode"] for call in client.calls[-2:]] == [False, True]
+    assert checkpoints[-1]["verification"]["verdict"] == "pass"
+    assert any(kind == "reasoning.event" and data.get("operation") == "audit_deep_started"
+               for _, kind, data in events)
 
 
 @pytest.mark.parametrize("verdict,evidence,count,solve,budget,want", [

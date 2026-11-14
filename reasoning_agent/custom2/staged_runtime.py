@@ -4,9 +4,10 @@ import hashlib
 import json
 import re
 import time
-from typing import Any, Mapping
+from contextlib import contextmanager
+from typing import Any, Iterator, Mapping
 
-from reasoning_agent.custom2.model_call import ModelResponse, call_model
+from reasoning_agent.custom2.model_call import ModelCallBudgetExhausted, ModelResponse, call_model
 from reasoning_agent.custom2.models import AgentState
 from reasoning_agent.custom2.program_checks import check_expression, numeric_equalities, requested_checks
 from reasoning_agent.custom2.solution_parser import infer_profile
@@ -103,6 +104,9 @@ class StagedReasoningRuntime:
         self._final_profile = ProblemProfile()
         self._final_strategy = StagedStrategy()
         self._final_check_deadline: float | None = None
+        self._review_deadline: float | None = None
+        self._review_incomplete = False
+        self._solver_deadline: float | None = None
 
     def run(self, problem: str, metadata: dict | None = None) -> dict:
         started = time.monotonic()
@@ -124,6 +128,8 @@ class StagedReasoningRuntime:
         self._final_profile = ProblemProfile()
         self._final_strategy = StagedStrategy()
         self._final_check_deadline = None
+        self._review_deadline = self._solver_deadline = None
+        self._review_incomplete = False
         self._constraint_ledger = self._build_constraint_ledger(problem)
         configured_budget, deadline_headroom, total_budget = effective_staged_budget_seconds(
             self.config
@@ -136,7 +142,7 @@ class StagedReasoningRuntime:
             total_budget,
             max(
                 0.0,
-                float(getattr(self.config, "custom2_finalize_reserve_seconds", 120.0)),
+                float(getattr(self.config, "staged_finalize_reserve_seconds", 30.0)),
                 total_budget - convergence_budget,
             ),
         )
@@ -236,17 +242,13 @@ class StagedReasoningRuntime:
             if self._convergence_due():
                 self._record("convergence_deadline_reached", action="skip_audit_return_existing_solution")
                 return self._final_result(draft)
-            fidelity = self._model_fidelity(problem, draft, strategy)
+            fidelity, audit = self._review_candidate(problem, profile, strategy, draft, checks,
+                                                     preserve_repair=True)
             self._record(
                 "model_fidelity_completed",
                 verdict=fidelity.verdict,
                 first_fatal_error=fidelity.first_fatal_error[:300],
                 additional_errors=[issue.model_dump() for issue in fidelity.additional_errors],
-            )
-            audit = (
-                self._fidelity_failure_as_audit(fidelity)
-                if fidelity.verdict == "fail"
-                else self._audit(problem, profile, strategy, draft, checks)
             )
             audit = self._apply_local_evidence(audit, checks)
             self._remember_audit_findings(audit)
@@ -357,20 +359,15 @@ class StagedReasoningRuntime:
                     repair_checks = self._local_checks(
                         problem, profile, strategy, repaired
                     )
-                    repair_fidelity = self._model_fidelity(problem, repaired, strategy)
+                    repair_fidelity, repair_audit = self._review_candidate(
+                        problem, profile, strategy, repaired, repair_checks,
+                    )
                     self._record(
                         "repair_model_fidelity_completed",
                         repair_index=repair_index,
                         verdict=repair_fidelity.verdict,
                         first_fatal_error=repair_fidelity.first_fatal_error[:300],
                         additional_errors=[issue.model_dump() for issue in repair_fidelity.additional_errors],
-                    )
-                    repair_audit = (
-                        self._fidelity_failure_as_audit(repair_fidelity)
-                        if repair_fidelity.verdict == "fail"
-                        else self._audit(
-                            problem, profile, strategy, repaired, repair_checks
-                        )
                     )
                     repair_audit = self._apply_local_evidence(repair_audit, repair_checks)
                     self._candidate_reviews[repaired.strip()] = repair_audit
@@ -1196,6 +1193,16 @@ class StagedReasoningRuntime:
     def _solve(self, problem: str, profile: ProblemProfile, strategy: StagedStrategy,
                material: str, *, attempt: int, previous: str = "", audit: StagedAudit | None = None,
                recovery_action: RecoveryAction | None = None) -> str | None:
+        assert self.state is not None
+        reserve = (
+            max(0.0, self.config.staged_repair_reserve_seconds)
+            + max(0.0, self.config.staged_review_round_budget_seconds)
+            if attempt == 1 else max(0.0, self.config.staged_repair_review_reserve_seconds)
+        )
+        available = remaining_seconds(self.state) - self.state.finalize_reserve_seconds - reserve
+        cap = (min(self.config.staged_solver_timeout_seconds, self.config.staged_primary_compact_timeout_seconds)
+               if attempt == 1 else self.config.staged_solver_repair_timeout_seconds)
+        self._solver_deadline = time.monotonic() + max(0.0, min(cap, available))
         solver_material = material
         repair_context = ""
         if previous and audit:
@@ -1579,7 +1586,7 @@ class StagedReasoningRuntime:
             f"失败原因：{failure_reason}\n"
             "答案覆盖要求："
             f"{json.dumps(coverage, ensure_ascii=False)}\n"
-            "这是本次推理失败后唯一一次压缩救援，不得继续探索或请求再次重试。"
+            "在当前调用预算内完成关键推导、证明义务与自检；不要请求额外重试。"
         )
         if recovery_action in {"strategy_rethink", "global_restart"} or (
             recovery_action is None and attempt > 1
@@ -1644,7 +1651,8 @@ class StagedReasoningRuntime:
             ),
             max_timeout_seconds=compact_timeout,
             thinking_mode=bool(
-                getattr(self.config, "staged_solver_compressed_thinking_mode", False)
+                self.config.staged_solver_compressed_thinking_mode if attempt == 1
+                else self.config.staged_solver_repair_thinking_mode
             ),
             temperature=float(getattr(
                 self.config,
@@ -1722,23 +1730,7 @@ class StagedReasoningRuntime:
 
     def _normal_solver_timeout_seconds(self, attempt: int = 1) -> float:
         assert self.state is not None
-        compressed_reserve = 0.0
-        if getattr(self.config, "staged_solver_compressed_retry_enabled", True):
-            compressed_reserve = max(
-                0.0,
-                float(
-                    getattr(
-                        self.config,
-                        "staged_solver_compressed_call_estimate_seconds",
-                        200.0,
-                    )
-                ),
-            )
-        available = (
-            remaining_seconds(self.state)
-            - self.state.finalize_reserve_seconds
-            - compressed_reserve
-        )
+        assert self._solver_deadline is not None
         configured_name = (
             "staged_solver_timeout_seconds"
             if attempt == 1 else "staged_solver_repair_timeout_seconds"
@@ -1748,7 +1740,7 @@ class StagedReasoningRuntime:
             configured_name,
             getattr(self.config, "staged_client_max_wait_seconds", 720.0),
         ))
-        return max(0.001, min(configured, available))
+        return max(0.0, min(configured, self._solver_deadline - time.monotonic()))
 
     def _solver_failure_reason(self, content: str) -> str:
         if self._last_call_error is not None:
@@ -1880,6 +1872,39 @@ class StagedReasoningRuntime:
                                  "Correct the failed checks and all dependent reasoning."],
         })
 
+    @contextmanager
+    def _review_budget(self, *, preserve_repair: bool = False) -> Iterator[None]:
+        """One deadline covers fidelity, both audit levels and format recovery."""
+        if self._review_deadline is not None:
+            yield
+            return
+        assert self.state is not None
+        available = remaining_seconds(self.state) - self.state.finalize_reserve_seconds
+        if preserve_repair:
+            available -= max(0.0, self.config.staged_repair_reserve_seconds)
+        budget = max(0.0, min(self.config.staged_review_round_budget_seconds, available))
+        self._review_deadline = time.monotonic() + budget
+        self._review_incomplete = False
+        self._record("review_round_started", budget_seconds=round(budget, 3))
+        try:
+            yield
+        finally:
+            self._record("review_round_completed", review_status=(
+                "service_unavailable" if self._review_incomplete else "completed"))
+            self._review_deadline = None
+
+    def _review_candidate(self, problem: str, profile: ProblemProfile, strategy: StagedStrategy,
+                          draft: str, checks: dict, *, preserve_repair: bool = False
+                          ) -> tuple[StagedModelFidelity, StagedAudit]:
+        with self._review_budget(preserve_repair=preserve_repair):
+            fidelity = self._model_fidelity(problem, draft, strategy)
+            audit = (self._fidelity_failure_as_audit(fidelity) if fidelity.verdict == "fail"
+                     else self._audit(problem, profile, strategy, draft, checks))
+            if self._review_incomplete and audit.verdict == "pass":
+                audit = StagedAudit(verdict="uncertain", review_status="service_unavailable",
+                                    evidence="本轮部分审查未完成，不能标为审查通过。")
+            return fidelity, audit
+
     def _model_fidelity(self, problem: str, draft: str,
                         strategy: StagedStrategy | None = None) -> StagedModelFidelity:
         """Reject only explicit rewrites that solve a different problem.
@@ -1978,6 +2003,27 @@ class StagedReasoningRuntime:
 
     def _audit(self, problem: str, profile: ProblemProfile, strategy: StagedStrategy,
                draft: str, checks: dict) -> StagedAudit:
+        with self._review_budget():
+            quick = self._audit_once(problem, profile, strategy, draft, checks, thinking_mode=False)
+            self._record("audit_fast_completed", verdict=quick.verdict, review_status=quick.review_status)
+            if quick.review_status in {"service_unavailable", "protocol_error"}:
+                return quick
+            if quick.verdict == "pass" and (quick.unmet_obligations or quick.first_fatal_error
+                                             or checks.get("hard_failures")):
+                quick = quick.model_copy(update={"verdict": "uncertain", "review_status": "inconclusive"})
+            if quick.verdict == "pass":
+                return quick
+            if not self.config.staged_targeted_audit_thinking_mode:
+                return quick
+            self._record("audit_deep_started", reason="focused_review_required")
+            deep = self._audit_once(problem, profile, strategy, draft, checks,
+                                    thinking_mode=True, focus=quick)
+            self._record("audit_deep_completed", verdict=deep.verdict, review_status=deep.review_status)
+            return deep
+
+    def _audit_once(self, problem: str, profile: ProblemProfile, strategy: StagedStrategy,
+                    draft: str, checks: dict, *, thinking_mode: bool,
+                    focus: StagedAudit | None = None) -> StagedAudit:
         payload = {
             "problem": problem, "profile": profile.model_dump(), "strategy": strategy.model_dump(),
             # Planner cards deliberately exclude reference problem/solution.
@@ -1987,8 +2033,17 @@ class StagedReasoningRuntime:
             "solution": draft, "local_checks": checks,
             "special_requirements": self._build_special_requirements(problem, profile),
         }
+        system = STAGED_AUDIT_PROMPT + (
+            "\n先检查草稿与原题的一致性、关键推导和证明义务，只返回规定的 JSON 审查报告。"
+            "不要重新求解整道题。无法核实时返回 uncertain 并列明具体疑点；不能编造检查结果。"
+        )
+        if focus is not None:
+            payload["review_focus"] = focus.model_dump()
+            system += ("\n这是针对快速审查疑点的深度复核。逐项核对 review_focus 中的断言和证据，"
+                       "结合原题及草稿上下文判断疑点是否成立，不要重写完整解答。"
+                       "只有疑点均消除且不存在其他已知错误时才返回 pass。")
         audit, status = self._review_response(
-            "targeted_audit", STAGED_AUDIT_PROMPT, payload, StagedAudit,
+            "targeted_audit", system, payload, StagedAudit, thinking_mode=thinking_mode,
         )
         if audit is None:
             return StagedAudit(verdict="uncertain", review_status=status)
@@ -2031,12 +2086,16 @@ class StagedReasoningRuntime:
             return StagedAudit(verdict="uncertain", evidence="审查输出无法解析")
 
     def _review_response(self, call_type: str, system: str, payload: dict,
-                         schema: type[StagedAudit] | type[StagedModelFidelity]) -> tuple[Any, str]:
+                         schema: type[StagedAudit] | type[StagedModelFidelity], *,
+                         thinking_mode: bool | None = None) -> tuple[Any, str]:
         """Allow one short recovery call; infrastructure failures are not math errors."""
-        data = self._structured(call_type, system, payload)
+        data = self._structured(call_type, system, payload, thinking_mode=thinking_mode)
         reason = "No valid audit JSON object or explicit verdict."
         status = "protocol_error"
         for attempt in range(2):
+            if self._last_call_error is not None:
+                self._review_incomplete = True
+                return None, "service_unavailable"
             status = ("service_unavailable" if self._last_call_error or not (
                 self._last_structured_response.strip()
             ) else "protocol_error")
@@ -2057,6 +2116,7 @@ class StagedReasoningRuntime:
                     rejection_reason=reason,
                 )
         self._record("review_recovery_exhausted", call_type=call_type, review_status=status)
+        self._review_incomplete = True
         return None, status
 
     def _normalize_audit_payload(
@@ -2224,6 +2284,8 @@ class StagedReasoningRuntime:
             float(getattr(self.config, timeout_name))
             if timeout_name is not None else None
         )
+        if call_type == "targeted_audit" and thinking_mode:
+            timeout = self.config.staged_deep_audit_timeout_seconds
         response = self._call(
             call_type, system, payload,
             max_tokens=int(default_tokens), max_timeout_seconds=timeout,
@@ -2280,6 +2342,8 @@ class StagedReasoningRuntime:
                         65536,
                     ))),
                 )
+            elif call_type == "targeted_audit":
+                max_tokens = max(1, int(self.config.staged_deep_audit_max_tokens))
         messages = messages_override or [
             {"role": "system", "content": system},
             {
@@ -2300,17 +2364,34 @@ class StagedReasoningRuntime:
             else:
                 temperature = 0.0
         try:
+            call_timeout = (float(self.config.staged_client_max_wait_seconds)
+                            if max_timeout_seconds is None else max_timeout_seconds)
+            if call_type in {"model_fidelity", "targeted_audit", "audit_parse_retry"}:
+                if self._review_deadline is not None:
+                    call_timeout = min(call_timeout, self._review_deadline - time.monotonic())
+            elif call_type in {"solver", "solver_compressed", "solver_repair"}:
+                if self._solver_deadline is not None:
+                    call_timeout = min(call_timeout, self._solver_deadline - time.monotonic())
+            if call_timeout <= 0:
+                raise ModelCallBudgetExhausted("stage_budget_exhausted")
             response = call_model(self.client, self.state, self.debug_trace, call_type,
                                   allow_finalize_reserve=allow_finalize,
-                                  max_timeout_seconds=(
-                                      float(getattr(self.config, "staged_client_max_wait_seconds", 720.0))
-                                      if max_timeout_seconds is None else max_timeout_seconds
-                                  ),
+                                  max_timeout_seconds=call_timeout,
                                   messages=messages,
                                   temperature=temperature,
                                   thinking_mode=effective_thinking_mode,
                                   max_tokens=max_tokens)
             self._last_model_response = response
+            solution_call = call_type in {
+                "solver", "solver_compressed", "solver_repair",
+                "emergency_integrator", "emergency_direct_solver", "final_arbitrator",
+            }
+            if solution_call and not response.content.strip() and response.reasoning_content.strip():
+                self._record(
+                    "solution_candidate_selected", call_type=call_type,
+                    source="reasoning_content", content_length=len(response.reasoning_content),
+                )
+                return response.reasoning_content
             return response.content
         except Exception as exc:
             self._last_call_error = (type(exc).__name__, str(exc)[:1000])

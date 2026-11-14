@@ -120,6 +120,12 @@ def observe_pair(scenario):
                     "library.selected", "library.injected", "tool.result"}
     before["events"] = [event for event in before["events"] if event[1] != "tool.result"]
     after["events"] = [event for event in after["events"] if event[1] not in added_events]
+    review_events = {"review_round_started", "review_round_completed", "audit_fast_completed",
+                     "audit_deep_started", "audit_deep_completed"}
+    for observation in (before, after):
+        observation["events"] = [event for event in observation["events"]
+                                 if not (event[1] == "reasoning.event"
+                                         and event[2].get("operation") in review_events)]
     # Safe failure diagnostics are additive; keep all pre-existing failure fields compared.
     for event in after["events"]:
         if event[1] == "model.failed":
@@ -307,6 +313,17 @@ if (self.public_sections is not None
         and getattr(self.client, "supports_content_stream", False) is True):
     preview = PublicAnswerStream(self.context, self.stage, self.check_running, self.public_sections)
     kwargs.update(on_content=preview.feed, check_running=self.check_running)
+reasoning = None
+if (env_flag("MATHS_MODEL_STREAMING", True)
+        and env_flag("MATHS_SHOW_MODEL_REASONING", False)
+        and getattr(self.client, "supports_reasoning_stream", False) is True):
+    reasoning = ModelReasoningStream(self.context, self.stage, self.check_running,
+                                     call_type, kwargs.get("messages", []))
+    kwargs.update(on_reasoning=reasoning.feed, check_running=self.check_running)
+if reasoning:
+    reasoning.complete()
+if reasoning:
+    reasoning.interrupt()
 if preview:
     if isinstance(raw, dict) and raw.get("tool_calls"):
         preview.discard()
@@ -379,10 +396,15 @@ if preview:
             failure_payload.keys = failure_payload.keys[:-2]
             failure_payload.values = failure_payload.values[:-2]
         if name == "StagedAdapter":
+            # Only the staged finalization reserve replaced the legacy field.
+            reserves = [node for node in ast.walk(after) if isinstance(node, ast.Attribute)
+                        and node.attr == "staged_finalize_reserve_seconds"]
+            assert len(reserves) == 1
+            reserves[0].attr = "custom2_finalize_reserve_seconds"
             record = next(node for node in after.body if getattr(node, "name", None) == "_record")
             allowed = next(node.value for node in record.body if isinstance(node, ast.Assign)
                            and any(getattr(target, "id", None) == "allowed" for target in node.targets))
-            added = {"format_failures", "hard_failure_count", "confirmed_audit_failure", "local_verdict", "candidate_id"}
+            added = {"format_failures", "hard_failure_count", "confirmed_audit_failure", "local_verdict", "candidate_id", "budget_seconds"}
             assert {node.value for node in allowed.elts} & added == added
             allowed.elts = [node for node in allowed.elts if node.value not in added]
             before.body = [node for node in before.body if getattr(node, "name", None) != "execute"]
@@ -418,6 +440,28 @@ def test_extracted_node_branches_keep_original_statements():
             assert sum(ast.dump(node) == ast.dump(log_hook) for node in run.body) == 1
             run.body = [node for node in run.body if ast.dump(node) != ast.dump(log_hook)]
         before = Receiver().visit(ast.Module(body=branch.body, type_ignores=[]))
+        if name == "verify":
+            # The review helper owns the shared timer; all other branch statements stay compared.
+            combined = ast.parse('''
+fidelity, audit = engine._review_candidate(problem, profile, plan, state["draft"], checks,
+                                          preserve_repair=not state["repair_count"])
+''').body[0]
+            original_review = ast.parse('''
+fidelity = engine._model_fidelity(problem, state["draft"], plan)
+audit = (engine._fidelity_failure_as_audit(fidelity) if fidelity.verdict == "fail"
+         else engine._audit(problem, profile, plan, state["draft"], checks))
+''').body
+            replacements = []
+
+            class ExpandReview(ast.NodeTransformer):
+                def visit_Assign(self, node):
+                    if ast.dump(node) == ast.dump(combined):
+                        replacements.append(node)
+                        return original_review
+                    return self.generic_visit(node)
+
+            run = ExpandReview().visit(run)
+            assert len(replacements) == 1
         assert ast.dump(before) == ast.dump(ast.Module(body=run.body, type_ignores=[]))
         branch = branch.orelse[0] if branch.orelse else None
 

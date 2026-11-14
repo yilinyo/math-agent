@@ -10,6 +10,7 @@ from agent_platform.solve_agents import SOLVE_CALLS, SolveAgentSnapshot, public_
 class ConfiguredSolveClient:
     """Apply profile limits inside the existing per-phase request budget."""
     supports_content_stream = True
+    supports_reasoning_stream = True
     supports_tools = True
 
     def __init__(self, client, config):

@@ -337,6 +337,44 @@ MATHS_MODEL_STREAMING=false
 `true`（默认）启用解答正文流式生成；`false` 等待模型返回完整解答。该开关统一控制推导求解、重新求解与修复、应急求解、草稿整合和候选仲裁，默认模型与自定义 Solve Agent 均适用；客户端仍需支持流式。
 它不改变思考模式、题型识别、策略检索、规划和审查调用，也不关闭页面的 SSE 阶段进度和日志。终端已导出的同名环境变量优先于 `.env`。使用 `python -m agent_platform` 或分布式入口直接启动时，需自行将此变量加载到后端或 Worker 的进程环境；`bash start.sh` / `start.ps1` 会读取 `.env`。
 
+要在保持流式输出的同时关闭推导求解、修复和数学审查的深度思考，在 `.env` 中设置并重启后端：
+
+```dotenv
+MATHS_MODEL_STREAMING=true
+STAGED_SOLVER_COMPRESSED_THINKING_MODE=false
+STAGED_SOLVER_REPAIR_THINKING_MODE=false
+STAGED_TARGETED_AUDIT_THINKING_MODE=false
+```
+
+这三个思考开关默认 `true`。数学快速审查固定关闭思考，`STAGED_TARGETED_AUDIT_THINKING_MODE` 只控制发现疑点后的深度复核；关闭时仍执行快速审查。其他 Web 阶段默认不启用深度思考。关闭深度思考不会跳过修复或审查节点。自定义模型需使用支持 `thinking_mode` 的 Intern 协议；通用兼容协议不会发送此参数。
+
+如需在各阶段实时展示模型返回的思考内容，设置 `MATHS_SHOW_MODEL_REASONING=true`，并保持 `MATHS_MODEL_STREAMING=true`；对应阶段的思考开关也需开启。思考以独立的“模型思考过程”区域展示，按行脱敏后推送，保留多轮记录及中断状态。默认关闭此展示；单次调用最多展示 120,000 字符，超过时标记展示上限。密钥、本地路径和检测到的系统提示词复述仍会隐藏。历史任务没有保存的思考内容无法补回。
+
+解题、压缩解题、修复及最终整合调用结束后，优先取非空 `content`。若只有 `reasoning_content`，将其作为待检查候选，日志记录字段来源；候选仍须满足原有答案提取和格式要求，进入统一 `draft` 后继续执行本地检查、审查和修复。流式中途的空分片不会推进节点，未正常结束的流不会被提升为候选。分类和审计等结构化节点仍只解析 `content`，不会把思考内容当作合格 JSON。候选兼容不依赖思考展示开关。
+
+## 求解与审查预算
+
+任务总时限仍为 20 分钟。首次求解最多使用 660 秒，同一次求解的普通调用和恢复调用共用截止时间；推导不再统一限制为四步、每步三行，证明题必须完整展开证明义务和自检。模型可提前完成，超时上限不代表最低推理时长。
+
+每轮先执行不思考的题意一致性检查和快速数学审查；快速审查发现明确疑点或无法判断时，再针对疑点深度复核，深查输出上限为 8192 tokens。审查调用只解析 `content` 中的结构化报告。传输超时不进行格式恢复，结果标为“未完成审查”；只有格式不合规的响应才允许一次短恢复。超时本身既不代表通过，也不构成数学错误或重解依据；已有独立计算反例仍可触发修复。
+
+以下参数可在 `.env` 配置，修改后重启后端：
+
+```dotenv
+STAGED_SOLVER_TIMEOUT_SECONDS=660
+STAGED_PRIMARY_COMPACT_TIMEOUT_SECONDS=660
+STAGED_REVIEW_ROUND_BUDGET_SECONDS=150
+STAGED_MODEL_FIDELITY_TIMEOUT_SECONDS=20
+STAGED_TARGETED_AUDIT_TIMEOUT_SECONDS=45
+STAGED_DEEP_AUDIT_TIMEOUT_SECONDS=60
+STAGED_AUDIT_RETRY_TIMEOUT_SECONDS=10
+STAGED_REPAIR_RESERVE_SECONDS=240
+STAGED_SOLVER_REPAIR_TIMEOUT_SECONDS=180
+STAGED_FINALIZE_RESERVE_SECONDS=30
+```
+
+每轮 150 秒是共享上限，包含一致性检查、快速审查、深度复核和格式恢复，不是各调用上限之和。首次求解分配预算时会同时留出首次审查预算、240 秒修复与复核窗口，以及最终返回时间；若前置阶段耗时较多，首次求解上限会缩短。修复调用最多 180 秒，并预留约 60 秒复核，实际仍受剩余任务预算约束。前面阶段提前完成的时间可供后续阶段使用，不会固定等待或占满预算。日志会记录共享预算、快速审查、深度复核及未完成状态。旧检查点可能因代码和配置变化失效，请用新任务验证。
+
 ## LangSmith 追踪
 
 在 `.env` 配置独立的 LangSmith Key，并重新启动应用：

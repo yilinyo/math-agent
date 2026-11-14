@@ -11,11 +11,12 @@ from llm_client import InternChatClient
 
 
 @pytest.mark.parametrize("setting,streaming", [(None, True), ("true", True), ("false", False)])
+@pytest.mark.parametrize("thinking", [False, True])
 @pytest.mark.parametrize("call_type", [
     "solver", "solver_compressed", "solver_repair",
     "emergency_direct_solver", "emergency_integrator", "final_arbitrator",
 ])
-def test_model_streaming_switch_preserves_complete_answers_and_usage(monkeypatch, setting, streaming, call_type):
+def test_model_streaming_switch_preserves_complete_answers_and_usage(monkeypatch, setting, streaming, thinking, call_type):
     monkeypatch.setenv("INTERN_API_KEY", "test-credential")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     if setting is None:
@@ -45,13 +46,13 @@ def test_model_streaming_switch_preserves_complete_answers_and_usage(monkeypatch
         }], "usage": usage}
 
     with patch("llm_client.requests.post", return_value=http) as post:
-        result = proxy.chat(messages=[], return_message=True, thinking_mode=True, max_tokens=131072)
+        result = proxy.chat(messages=[], return_message=True, thinking_mode=thinking, max_tokens=131072)
 
     request = post.call_args.kwargs
     payload = json.loads(request["data"])
     assert payload.get("stream", False) is streaming
     assert request.get("stream", False) is streaming
-    assert payload["thinking_mode"] is True and payload["max_tokens"] == 131072
+    assert payload["thinking_mode"] is thinking and payload["max_tokens"] == 131072
     assert result["content"] == content and result["_finish_reason"] == "stop"
     assert result["_usage"] == usage
     assert any(kind == "model.started" for kind, _ in events)

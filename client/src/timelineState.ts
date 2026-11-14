@@ -2,8 +2,8 @@ import { type TraceEvent } from './api';
 import { executionSummary } from './taskStream';
 
 export interface TimelineContent {
-  id: string; kind: 'summary' | 'solution'; title: string; content: string;
-  nextIndex?: number; complete?: boolean;
+  id: string; kind: 'summary' | 'solution' | 'reasoning'; title: string; content: string;
+  nextIndex?: number; complete?: boolean; interrupted?: boolean; truncated?: boolean;
 }
 export interface TimelineStage {
   id: number; stage: string; startedAt: string; finishedAt?: string;
@@ -45,7 +45,25 @@ export function timelineFromEvent(previous: TimelineState | undefined, event: Tr
     stage.round = typeof event.payload.round === 'number' ? event.payload.round : undefined;
   }
   if (event.event_type === 'stage.outcome' && typeof event.payload.status === 'string') stage.outcome = event.payload.status;
-  if (event.event_type === 'answer.started' && preview && typeof id === 'string') {
+  if (event.event_type === 'reasoning.started' && typeof id === 'string') {
+    if (!stage.content.some(item => item.id === id)) {
+      stage.content.push({ id, kind: 'reasoning', title: '模型思考过程', content: '', nextIndex: 0 });
+    }
+  } else if (event.event_type.startsWith('reasoning.') && typeof id === 'string') {
+    const position = stage.content.findIndex(item => item.id === id && item.kind === 'reasoning');
+    if (position >= 0) {
+      const item = stage.content[position];
+      if (event.event_type === 'reasoning.delta' && event.payload.index === item.nextIndex
+          && !item.complete && !item.interrupted && typeof text === 'string'
+          && item.content.length + text.length <= 1000000) {
+        stage.content[position] = { ...item, content: item.content + text, nextIndex: item.nextIndex! + 1 };
+      } else if (['reasoning.completed', 'reasoning.interrupted'].includes(event.event_type)
+          && event.payload.chunks === item.nextIndex) {
+        stage.content[position] = { ...item, complete: event.event_type === 'reasoning.completed',
+          interrupted: event.event_type === 'reasoning.interrupted', truncated: event.payload.truncated === true };
+      }
+    }
+  } else if (event.event_type === 'answer.started' && preview && typeof id === 'string') {
     stage.content.push({ id, kind: 'solution', title: '', content: '', nextIndex: 0 });
   } else if (event.event_type === 'answer.delta' || event.event_type === 'answer.completed') {
     const position = stage.content.findIndex(item => item.id === id && item.nextIndex !== undefined);

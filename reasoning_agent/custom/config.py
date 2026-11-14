@@ -109,13 +109,19 @@ class AgentConfig:
     staged_final_check_budget_seconds: float = 3.0
     custom2_text_max_tasks: int = 24
     custom2_text_task_max_tokens: int = 16384
-    # staged runtime: each injected client request is capped at 12 minutes;
-    # the last four minutes are reserved for emergency integration.
+    # Per-call ceiling; solver and review phases apply their own shared deadlines.
     staged_client_max_wait_seconds: float = 720.0
-    # Reserve two minutes for final answer integration while allowing the
-    # 10-minute primary solver and a six-minute compact recovery to coexist
-    # inside the 20-minute per-problem envelope.
-    staged_convergence_seconds: float = 1080.0
+    staged_convergence_seconds: float = 1170.0
+    staged_finalize_reserve_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_FINALIZE_RESERVE_SECONDS", 30.0)
+    )
+    staged_repair_reserve_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_REPAIR_RESERVE_SECONDS", 240.0)
+    )
+    staged_repair_review_reserve_seconds: float = 60.0
+    staged_review_round_budget_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_REVIEW_ROUND_BUDGET_SECONDS", 150.0)
+    )
     # staged runtime 的各阶段独立控制思考模式和输出预算。
     staged_classifier_thinking_mode: bool = False
     staged_classifier_max_tokens: int = 8192
@@ -161,32 +167,51 @@ class AgentConfig:
         default_factory=lambda: env_flag("STAGED_COMPACT_REASONING_ONLY", True)
     )
     staged_solver_thinking_mode: bool = False
-    staged_solver_repair_thinking_mode: bool = True
+    staged_solver_repair_thinking_mode: bool = field(
+        default_factory=lambda: env_flag("STAGED_SOLVER_REPAIR_THINKING_MODE", True)
+    )
     staged_solver_max_tokens: int = 16384 + 8192
-    # Complex staged problems get up to ten minutes for the primary solver;
+    # Complex staged problems get up to eleven minutes for the primary solver;
     # the runtime still clamps this by the 20-minute per-problem deadline and
     # reserves time for recovery/finalization.
-    staged_solver_timeout_seconds: float = 660.0
-    staged_solver_repair_timeout_seconds: float = 300.0
+    staged_solver_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_SOLVER_TIMEOUT_SECONDS", 660.0)
+    )
+    staged_solver_repair_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_SOLVER_REPAIR_TIMEOUT_SECONDS", 180.0)
+    )
     staged_solver_compressed_retry_enabled: bool = True
-    staged_solver_compressed_thinking_mode: bool = True
+    staged_solver_compressed_thinking_mode: bool = field(
+        default_factory=lambda: env_flag("STAGED_SOLVER_COMPRESSED_THINKING_MODE", True)
+    )
     staged_primary_solver_temperature: float = 0.3
     staged_repair_solver_temperature: float = 0.5
     staged_solver_compressed_max_tokens: int = 131072
-    # Primary compact-only solve gets a longer single request; audit-triggered
-    # compact repairs keep the smaller recovery budget below.
-    staged_primary_compact_timeout_seconds: float = 660.0
+    # Primary calls share an eleven-minute ceiling; repairs use the separate
+    # repair ceiling even when dispatched through the compact solver client.
+    staged_primary_compact_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_PRIMARY_COMPACT_TIMEOUT_SECONDS", 660.0)
+    )
     staged_solver_compressed_call_estimate_seconds: float = 660.0
-    staged_targeted_audit_thinking_mode: bool = True
-    staged_targeted_audit_max_tokens: int = 16384
-    # The first audit is a focused fault finder, not a second full solve.
-    # Keep enough wall-clock budget for an audited compact re-derivation.
-    staged_targeted_audit_timeout_seconds: float = 360.0
+    staged_targeted_audit_thinking_mode: bool = field(
+        default_factory=lambda: env_flag("STAGED_TARGETED_AUDIT_THINKING_MODE", True)
+    )
+    staged_targeted_audit_max_tokens: int = 4096
+    # Quick review never thinks; this switch controls only focused deep review.
+    staged_targeted_audit_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_TARGETED_AUDIT_TIMEOUT_SECONDS", 45.0)
+    )
+    staged_deep_audit_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_DEEP_AUDIT_TIMEOUT_SECONDS", 60.0)
+    )
+    staged_deep_audit_max_tokens: int = 8192
     # If an audit response cannot be parsed after local shape recovery, issue
     # one compact, no-thinking retry with the original response and rejection
     # reason so the auditor can regenerate a schema-compliant report.
     staged_audit_retry_max_tokens: int = 4096
-    staged_audit_retry_timeout_seconds: float = 60.0
+    staged_audit_retry_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_AUDIT_RETRY_TIMEOUT_SECONDS", 10.0)
+    )
     # A separate low-temperature gate checks that the Solver did not relax or
     # reverse constraints while translating the problem into a mathematical model.
     staged_model_fidelity_enabled: bool = field(
@@ -196,7 +221,9 @@ class AgentConfig:
     # Fidelity checks reason over one Solver draft but do not need the full
     # Solver budget. The first attempt uses this half-size thinking ceiling.
     staged_model_fidelity_thinking_max_tokens: int = 65536
-    staged_model_fidelity_timeout_seconds: float = 200.0
+    staged_model_fidelity_timeout_seconds: float = field(
+        default_factory=lambda: env_float("STAGED_MODEL_FIDELITY_TIMEOUT_SECONDS", 20.0)
+    )
     staged_model_fidelity_thinking_mode: bool = False
     staged_constraint_ledger_max_chars: int = 12000
     # Emergency integration and candidate arbitration are time-bounded control

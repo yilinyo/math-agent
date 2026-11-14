@@ -60,7 +60,7 @@ class StagedAdapter(StagedReasoningRuntime):
                 context.finalize_reserve_seconds, config.staged_best_candidate_return_seconds,
             )),
             finalize_reserve_seconds=min(total_budget, max(
-                config.custom2_finalize_reserve_seconds, total_budget - convergence_budget,
+                config.staged_finalize_reserve_seconds, total_budget - convergence_budget,
             )),
         )
         self._convergence_budget = convergence_budget
@@ -205,7 +205,7 @@ class StagedAdapter(StagedReasoningRuntime):
             "reason", "source", "verdict", "attempt", "error_type", "call_type",
             "ok", "extraction", "domain", "answer_mode", "risk_level", "index_version",
             "first_fatal_error", "required_changes", "content_length", "candidate_count",
-            "response_style", "steps_available",
+            "response_style", "steps_available", "budget_seconds",
             "action", "recovery_action", "review_status", "accepted", "budget_exhausted",
             "degraded_channels", "mode", "confidence", "similarity",
             "format_failures", "hard_failure_count", "confirmed_audit_failure", "local_verdict", "candidate_id",

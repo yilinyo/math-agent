@@ -106,6 +106,12 @@ h1, h2, h3, p { margin: 0; }
 .timeline-content .markdown { font-size: 13px; }
 .timeline-content .markdown h2 { font-size: 15px; }
 .timeline-content .markdown h3 { font-size: 14px; }
+.timeline-reasoning { min-width: 0; margin-top: 12px; border-left: 2px solid #b8c3bd; padding-left: 12px; }
+.timeline-reasoning > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; min-height: 30px; color: #52615a; }
+.timeline-reasoning > summary small { margin-left: auto; font-size: 11px; color: #77827a; }
+.timeline-reasoning .markdown { font-size: 13px; overflow-wrap: anywhere; }
+.timeline-reasoning .markdown h2 { font-size: 15px; }
+.timeline-reasoning .markdown h3 { font-size: 14px; }
 .timeline-draft-label { margin-bottom: 8px; font-size: 11px; color: #917238; line-height: 1.8; overflow-wrap: anywhere; }
 .timeline-logs { margin-top: 10px; color: #85918a; font-size: 11px; }
 .timeline-logs summary { cursor: pointer; min-height: 24px; }
